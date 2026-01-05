@@ -1,0 +1,42 @@
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  GO_VERSION: "1.22"
+
+.go-base:
+  image: golang:${GO_VERSION}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - /go/pkg/mod/
+  before_script:
+    - go mod download
+
+lint:
+  extends: .go-base
+  stage: lint
+  script:
+    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    - golangci-lint run ./...
+  allow_failure: true
+
+test:
+  extends: .go-base
+  stage: test
+  script:
+    - go test -v -race -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out
+  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
+
+build:cli:
+  extends: .go-base
+  stage: build
+  script:
+    - CGO_ENABLED=0 go build -ldflags="-s -w" -o fi-mcp ./cmd/fi-mcp
+  artifacts:
+    paths:
+      - fi-mcp
+    expire_in: 1 week
