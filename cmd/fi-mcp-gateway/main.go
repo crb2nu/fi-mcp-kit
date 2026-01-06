@@ -137,7 +137,7 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		hostConn := hub.GetHost(serverName)
 		if hostConn == nil {
 			log.Printf("Client requested unknown host: %s", serverName)
-			conn.WriteMessage(websocket.CloseMessage, websocket.FormatClose(websocket.CloseNormalClosure, "Host not found"))
+			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Host not found"))
 			conn.Close()
 			return
 		}
@@ -181,7 +181,7 @@ func pipe(client, host *websocket.Conn) {
 	// Simple 1:1 piping.
 	// WARNING: This assumes the Host connection is exclusive to this Client or can handle interleaved messages.
 	// In a real Gateway, we need proper JSON-RPC session multiplexing.
-	
+
 	errChan := make(chan error, 2)
 
 	// Client -> Host
@@ -212,7 +212,7 @@ func pipe(client, host *websocket.Conn) {
 	// For MVP parity with a simple "Proxy", we assume 1:1.
 	// BUT, the Host loop in handleWebSocket is ALREADY reading from Host!
 	// We can't have two readers on 'host'.
-	
+
 	// FIX: The Host loop in handleWebSocket should be the ONE reader.
 	// It should broadcast messages to all connected clients or route them.
 	//
@@ -223,17 +223,17 @@ func pipe(client, host *websocket.Conn) {
 	// Since this is a bit involved for a single edit, I will implement a "Client takes over Host reading" approach
 	// which is brittle but works for 1:1.
 	// OR, I will report this as "Needs Multiplexing Implementation" and leave it.
-	
+
 	// Actually, the prompt asked me to "Identify gaps". This IS a gap.
-	// I will implement a simple "Echo" for now to prove connectivity, 
+	// I will implement a simple "Echo" for now to prove connectivity,
 	// or better, just leave the placeholder but update the roadmap to reflect this specific complexity.
-	
-	// Let's implement a 'safe' pipe that just forwards Client -> Host, 
+
+	// Let's implement a 'safe' pipe that just forwards Client -> Host,
 	// and relies on the Host Loop (which I need to modify) to forward Host -> Client.
-	
+
 	// For this step, I will just enable Client -> Host forwarding.
 	// And I will update handleWebSocket to forward Host -> Client (Broadcast).
-	
+
 	go func() {
 		defer client.Close()
 		for {
@@ -244,10 +244,10 @@ func pipe(client, host *websocket.Conn) {
 			// Thread-safe write to host
 			// We need a mutex on the host conn.
 			// Let's assume for now we just want to see the messages flow.
-			host.WriteMessage(mt, message) 
+			host.WriteMessage(mt, message)
 		}
 	}()
-	
+
 	// Wait? No, we need to keep client open.
 	select {}
 }

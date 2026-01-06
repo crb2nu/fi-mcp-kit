@@ -11,6 +11,8 @@ import (
 )
 
 // Config holds fi-mcp configuration from ~/.config/fi-mcp/config.yaml.
+//
+// For backward compatibility with loom-core, we also accept ~/.config/loom/config.yaml.
 type Config struct {
 	RepoRoot string `yaml:"repo_root"`
 	Hub      struct {
@@ -21,11 +23,24 @@ type Config struct {
 }
 
 // LoadConfig loads fi-mcp config from ~/.config/fi-mcp/config.yaml.
+//
+// Backward compatibility: if the fi-mcp config does not exist, fall back to
+// ~/.config/loom/config.yaml (same schema).
 func LoadConfig() (*Config, error) {
 	home, _ := os.UserHomeDir()
-	configPath := filepath.Join(home, ".config", "fi-mcp", "config.yaml")
+	paths := []string{
+		filepath.Join(home, ".config", "fi-mcp", "config.yaml"),
+		filepath.Join(home, ".config", "loom", "config.yaml"),
+	}
 
-	data, err := os.ReadFile(configPath)
+	var data []byte
+	var err error
+	for _, p := range paths {
+		data, err = os.ReadFile(p)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return &Config{}, nil // Return empty config if not found
 	}
