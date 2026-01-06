@@ -1,39 +1,18 @@
-stages:
-  - lint
-  - test
-  - build
+# Go CI - Uses shared templates from platform/gitops
+include:
+  - project: 'platform/gitops'
+    file: '/ci/templates/go.yml'
 
-variables:
-  GO_VERSION: "1.22"
-
-.go-base:
-  image: golang:${GO_VERSION}
-  cache:
-    key: ${CI_COMMIT_REF_SLUG}
-    paths:
-      - /go/pkg/mod/
-  before_script:
-    - go mod download
+stages: [lint, test, build]
 
 lint:
-  extends: .go-base
-  stage: lint
-  script:
-    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-    - golangci-lint run ./...
-  allow_failure: true
+  extends: .go-lint
 
 test:
-  extends: .go-base
-  stage: test
-  script:
-    - go test -v -race -coverprofile=coverage.out ./...
-    - go tool cover -func=coverage.out
-  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
+  extends: .go-test
 
 build:cli:
-  extends: .go-base
-  stage: build
+  extends: .go-build
   script:
     - CGO_ENABLED=0 go build -ldflags="-s -w" -o fi-mcp ./cmd/fi-mcp
   artifacts:
