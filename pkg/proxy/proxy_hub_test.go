@@ -97,22 +97,15 @@ func TestHubTransportBridge(t *testing.T) {
 	}
 
 	// 4. Verify discovery
-	// We need to check if the tool "remote-server__echo" is registered in p.server
-	// Currently p.server doesn't have a public ListTools, but it has internal state.
-	// We can try to call it.
+	found := false
+	for _, t := range p.server.Tools() {
+		if t.Name == "remote-server__echo" {
+			found = true
+			break
+		}
+	}
 
-	// Wait a bit for async tasks
-	time.Sleep(200 * time.Millisecond)
-
-	// In a real scenario, the proxy.server.Run(ctx) would be called.
-	// Here we just check the tool count via p.server.
-	// Since we can't easily access p.server.tools, let's just assert no error in Prepare and check logs if we could.
-	// Actually, we can check p.backends
-	p.backendsMu.Lock()
-	_, exists := p.backends["remote-server"]
-	p.backendsMu.Unlock()
-
-	if !exists {
-		t.Fatal("remote-server backend should have been discovered and started")
+	if !found {
+		t.Fatal("remote-server__echo tool should have been discovered and registered")
 	}
 }

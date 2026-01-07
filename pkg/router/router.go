@@ -123,6 +123,13 @@ func (r *Router) Route(ctx context.Context, serverName string) (*RouteDecision, 
 		}
 	}
 	if server == nil {
+		if r.hubEnabled {
+			return &RouteDecision{
+				Target:     TargetHub,
+				ServerName: serverName,
+				Reason:     "server not in registry, routing to hub",
+			}, nil
+		}
 		return &RouteDecision{
 			Target:     TargetUnavailable,
 			ServerName: serverName,

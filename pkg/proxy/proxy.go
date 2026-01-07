@@ -43,11 +43,10 @@ type Proxy struct {
 
 	server *mcp.Server
 
-	backendsMu sync.Mutex
-	backends   map[string]*backend
-	reqID      atomic.Int64
+	reqID atomic.Int64
 
 	hubPool   *pool.Pool
+	localPool *pool.Pool
 	authHooks []AuthHook
 }
 
@@ -91,7 +90,6 @@ func New(cfg Config) (*Proxy, error) {
 		router:        r,
 		repoDir:       registry.GetRepoRoot(cfg.RegistryPath),
 		secretManager: sm,
-		backends:      make(map[string]*backend),
 	}
 
 	p.hubPool = pool.New(pool.Config{
@@ -101,10 +99,83 @@ func New(cfg Config) (*Proxy, error) {
 		DialFunc:    p.dialHub,
 	})
 
+	p.localPool = pool.New(pool.Config{
+		MaxIdle:     2,
+		MaxOpen:     10,
+		IdleTimeout: 30 * time.Minute,
+		DialFunc:    p.dialLocal,
+	})
+
 	p.server = mcp.NewServer(cfg.ProxyName, cfg.ProxyVersion)
 	p.server.SetInstructions("Unified MCP proxy: routes tools to local MCP servers defined in registry.yaml.")
 
 	return p, nil
+}
+
+func (p *Proxy) dialLocal(ctx context.Context, serverName string) (mcp.Transport, error) {
+	spec, err := p.reg.GetServerSpec(serverName, p.cfg.Target)
+	if err != nil || spec == nil {
+		return nil, fmt.Errorf("local server spec not found: %s", serverName)
+	}
+
+	if strings.TrimSpace(spec.Command) == "" {
+		return nil, fmt.Errorf("server %s has no local command defined", serverName)
+	}
+
+	resolvedCmd := generator.ResolveCommand(spec.Command, p.repoDir, "local")
+	resolvedArgs := generator.ResolveArgs(spec.Args, p.repoDir, "local")
+
+	cmd := exec.Command(resolvedCmd, resolvedArgs...)
+	cmd.Dir = p.repoDir
+	cmd.Env = p.buildEnv(spec.Env)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	// Best-effort: keep stderr visible for debugging.
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	transport := mcp.NewStdioTransport(stdout, stdin)
+
+	lt := &localTransport{
+		Transport: transport,
+		cmd:       cmd,
+	}
+
+	// Initialize backend
+	b := &backend{
+		transport: lt,
+		reqID:     &p.reqID,
+	}
+	if err := b.initialize(ctx); err != nil {
+		lt.Close()
+		return nil, fmt.Errorf("initialize local backend %s: %w", serverName, err)
+	}
+
+	return lt, nil
+}
+
+type localTransport struct {
+	mcp.Transport
+	cmd *exec.Cmd
+}
+
+func (t *localTransport) Close() error {
+	err := t.Transport.Close()
+	if t.cmd != nil && t.cmd.Process != nil {
+		_ = t.cmd.Process.Kill()
+		_, _ = t.cmd.Process.Wait()
+	}
+	return err
 }
 
 func (p *Proxy) dialHub(ctx context.Context, serverName string) (mcp.Transport, error) {
@@ -147,25 +218,24 @@ func (p *Proxy) Prepare(ctx context.Context) error {
 		if srv == nil {
 			continue
 		}
-		spec, err := p.reg.GetServerSpec(srv.Name, p.cfg.Target)
-		if err != nil || spec == nil {
-			continue
-		}
+		// Skip if no spec for target, but we'll try to get it in withBackend anyway if it's local
+		// Actually, Prepare should probably just list tools.
 
-		b, err := p.getOrStartBackend(ctx, srv.Name, spec)
+		serverName := srv.Name
+		var tools []mcp.Tool
+		err := p.withBackend(ctx, serverName, func(b *backend) error {
+			var err error
+			tools, err = b.listTools(ctx)
+			return err
+		})
 		if err != nil {
-			// Non-fatal: skip servers that fail to start in v0.
-			continue
-		}
-
-		tools, err := b.listTools(ctx)
-		if err != nil {
+			log.Printf("Failed to discover tools for %s: %v", serverName, err)
 			continue
 		}
 
 		for _, tool := range tools {
 			baseToolName := tool.Name
-			namespaced := srv.Name + "__" + baseToolName
+			namespaced := serverName + "__" + baseToolName
 
 			proxyTool := mcp.Tool{
 				Name:        namespaced,
@@ -173,14 +243,19 @@ func (p *Proxy) Prepare(ctx context.Context) error {
 				InputSchema: tool.InputSchema,
 			}
 
-			serverName := srv.Name
+			// Local tool call handler
 			toolName := baseToolName
 			p.server.AddTool(proxyTool, func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-				b, err := p.getBackend(ctx, serverName)
+				var result *mcp.CallToolResult
+				err := p.withBackend(ctx, serverName, func(b *backend) error {
+					var err error
+					result, err = b.callTool(ctx, toolName, args)
+					return err
+				})
 				if err != nil {
 					return mcp.ErrorResult(err), nil
 				}
-				return b.callTool(ctx, toolName, args)
+				return result, nil
 			})
 		}
 	}
@@ -196,82 +271,38 @@ func (p *Proxy) Run(ctx context.Context) error {
 	return p.server.Run(ctx)
 }
 
-func (p *Proxy) getBackend(ctx context.Context, serverName string) (*backend, error) {
-	p.backendsMu.Lock()
-	defer p.backendsMu.Unlock()
-
-	b := p.backends[serverName]
-	if b == nil {
-		return nil, fmt.Errorf("backend not available: %s", serverName)
-	}
-	return b, nil
-}
-
-func (p *Proxy) getOrStartBackend(ctx context.Context, serverName string, spec *registry.TargetSpec) (*backend, error) {
-	p.backendsMu.Lock()
-	if b := p.backends[serverName]; b != nil {
-		p.backendsMu.Unlock()
-		return b, nil
-	}
-	p.backendsMu.Unlock()
-
-	// Decide routing
+func (p *Proxy) withBackend(ctx context.Context, serverName string, fn func(b *backend) error) error {
 	decision, err := p.router.Route(ctx, serverName)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
+	var conn *pool.Conn
+	var pRef *pool.Pool
 	if decision.Target == router.TargetHub {
-		return p.startHubBackend(ctx, serverName)
+		pRef = p.hubPool
+	} else {
+		pRef = p.localPool
 	}
 
-	// Local fallback
-	if spec == nil || strings.TrimSpace(spec.Command) == "" {
-		return nil, fmt.Errorf("server %s has no local command defined", serverName)
-	}
-
-	resolvedCmd := generator.ResolveCommand(spec.Command, p.repoDir, "local")
-	resolvedArgs := generator.ResolveArgs(spec.Args, p.repoDir, "local")
-
-	cmd := exec.Command(resolvedCmd, resolvedArgs...)
-	cmd.Dir = p.repoDir
-	cmd.Env = p.buildEnv(spec.Env)
-
-	stdin, err := cmd.StdinPipe()
+	conn, err = pRef.Get(ctx, serverName)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	// Best-effort: keep stderr visible for debugging.
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	transport := mcp.NewStdioTransport(stdout, stdin)
+	defer pRef.Put(conn)
 
 	b := &backend{
 		name:      serverName,
-		spec:      spec,
-		cmd:       cmd,
-		transport: transport,
+		transport: conn.Transport,
 		reqID:     &p.reqID,
+		pooled:    conn,
 	}
 
-	if err := b.initialize(ctx); err != nil {
-		_ = b.Close()
-		return nil, err
-	}
+	// Initialize if needed (though pool might have already initialized it via DialFunc)
+	// For now, dialLocal and dialHub both initialize the connection.
+	// But local backends need MCP initialization.
 
-	p.backendsMu.Lock()
-	p.backends[serverName] = b
-	p.backendsMu.Unlock()
-
-	return b, nil
+	return fn(b)
 }
 
 var (
@@ -309,9 +340,6 @@ func (p *Proxy) resolveSecretRefs(value string) string {
 
 type backend struct {
 	name string
-	spec *registry.TargetSpec
-
-	cmd *exec.Cmd
 
 	transport mcp.Transport
 	reqID     *atomic.Int64
@@ -452,40 +480,14 @@ func (b *backend) recvResponse(ctx context.Context, id int64) (*mcp.Message, err
 }
 
 func (b *backend) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.pooled != nil {
-		// If it's a pooled connection, we don't necessarily want to kill it,
-		// but return it to the pool. However, if backend is closing,
-		// maybe we just mark it as healthy/unhealthy.
-		// For now, let's just close it if we don't have a pool reference back.
-		// Actually, we should probably have a Put method on Proxy.
-		return b.transport.Close()
-	}
-
-	if b.transport != nil {
-		_ = b.transport.Close()
-	}
-	if b.cmd != nil && b.cmd.Process != nil {
-		_ = b.cmd.Process.Kill()
-		_, _ = b.cmd.Process.Wait()
-	}
+	// backend no longer closes the transport directly, the pool does.
 	return nil
 }
 
 func (p *Proxy) Close() error {
-	p.backendsMu.Lock()
-	defer p.backendsMu.Unlock()
-
-	var firstErr error
-	for _, b := range p.backends {
-		if err := b.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	p.backends = make(map[string]*backend)
-	return firstErr
+	p.hubPool.Close()
+	p.localPool.Close()
+	return nil
 }
 
 func (p *Proxy) DefaultRegistryDir() string {

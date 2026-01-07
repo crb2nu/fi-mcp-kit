@@ -12,33 +12,6 @@ import (
 	"gitlab.flexinfer.ai/libs/mcp-go"
 )
 
-func (p *Proxy) startHubBackend(ctx context.Context, serverName string) (*backend, error) {
-	conn, err := p.hubPool.Get(ctx, serverName)
-	if err != nil {
-		return nil, err
-	}
-
-	b := &backend{
-		name:      serverName,
-		transport: conn.Transport,
-		reqID:     &p.reqID,
-		pooled:    conn,
-	}
-
-	// Double check or re-init if needed. pool.Get uses dialHub which initializes.
-	// But backend.initialize sends MCP-level init.
-	// Note: We might want to skip b.initialize if transport.Initialize already did it (it did).
-	// However, backend.initialize is harmless if idempotent or if we need to sync state.
-	// Actually mcp.WebSocketTransport.Initialize ALREADY does the MCP handshake.
-	// So we can skip it here to avoid "already initialized" errors.
-
-	p.backendsMu.Lock()
-	p.backends[serverName] = b
-	p.backendsMu.Unlock()
-
-	return b, nil
-}
-
 func (p *Proxy) discoverHubTools(ctx context.Context) error {
 	if !p.router.HubEnabled() {
 		return nil
@@ -85,24 +58,15 @@ func (p *Proxy) discoverHubTools(ctx context.Context) error {
 
 	// 2. Prepare tools for each remote host
 	for _, name := range hostNames {
-		// Skip if already managed locally (local takes precedence)
-		p.backendsMu.Lock()
-		if _, exists := p.backends[name]; exists {
-			p.backendsMu.Unlock()
-			continue
-		}
-		p.backendsMu.Unlock()
-
 		log.Printf("Auto-bridging remote host: %s", name)
-		b, err := p.startHubBackend(ctx, name)
+		var tools []mcp.Tool
+		err := p.withBackend(ctx, name, func(b *backend) error {
+			var err error
+			tools, err = b.listTools(ctx)
+			return err
+		})
 		if err != nil {
 			log.Printf("Failed to bridge remote host %s: %v", name, err)
-			continue
-		}
-
-		tools, err := b.listTools(ctx)
-		if err != nil {
-			log.Printf("Failed to list tools for remote host %s: %v", name, err)
 			continue
 		}
 
@@ -117,11 +81,16 @@ func (p *Proxy) discoverHubTools(ctx context.Context) error {
 			serverName := name
 			tn := tool.Name
 			p.server.AddTool(proxyTool, func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-				b, err := p.getBackend(ctx, serverName)
+				var result *mcp.CallToolResult
+				err := p.withBackend(ctx, serverName, func(b *backend) error {
+					var err error
+					result, err = b.callTool(ctx, tn, args)
+					return err
+				})
 				if err != nil {
 					return mcp.ErrorResult(err), nil
 				}
-				return b.callTool(ctx, tn, args)
+				return result, nil
 			})
 		}
 	}
