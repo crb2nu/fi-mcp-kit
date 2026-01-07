@@ -15,8 +15,8 @@ To be the enterprise-grade orchestration toolkit for the Model Context Protocol 
 
 ### Gateway Parity & Hub Transport
 
-- [ ] **Gateway Feature Parity**: Bring `services/fi-mcp-gateway` to parity with TypeScript implementation (WS support). (Started: Scaffolding created in `cmd/fi-mcp-gateway`)
-    - [ ] **JSON-RPC Multiplexing**: Implement session-based routing to allow multiple clients to share a single host connection.
+- [x] **Gateway Feature Parity**: Bring `services/fi-mcp-gateway` to parity with TypeScript implementation (WS support).
+  - [x] **JSON-RPC Multiplexing**: Implement session-based routing to allow multiple clients to share a single host connection.
 - [ ] **Auth Hooks**: Add authentication/authorization hooks and audit logging.
 - [ ] **Hub Transport**: Extend `fi-mcp proxy` to route requests to remote hub servers via the gateway.
 

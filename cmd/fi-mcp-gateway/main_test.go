@@ -108,6 +108,53 @@ func TestHostNotFound(t *testing.T) {
 	}
 }
 
+func TestGatewayAuthentication(t *testing.T) {
+	token := "secret-token"
+	hub := gateway.NewHub()
+	hub.Authenticator = &gateway.TokenAuthenticator{Token: token}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gateway.Handler(hub, w, r)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+
+	// 1. Try to connect without token - should fail
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL+"?server=test&role=host", nil)
+	if err == nil {
+		t.Fatal("Expected error connecting without token, got nil")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Expected 401 Unauthorized, got: %v (resp: %v)", err, resp)
+	}
+
+	// 2. Try with invalid token - should fail
+	_, resp2, err := websocket.DefaultDialer.Dial(wsURL+"?server=test&role=host&token=wrong", nil)
+	if err == nil {
+		t.Fatal("Expected error connecting with wrong token, got nil")
+	}
+	if resp2 == nil || resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Expected 401 Unauthorized for wrong token, got: %v (resp: %v)", err, resp2)
+	}
+
+	// 3. Try with valid token in query param
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?server=test&role=host&token="+token, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect with valid query token: %v", err)
+	}
+	conn.Close()
+
+	// 4. Try with valid token in Authorization header
+	header := http.Header{}
+	header.Add("Authorization", "Bearer "+token)
+	conn2, _, err := websocket.DefaultDialer.Dial(wsURL+"?server=test&role=host", header)
+	if err != nil {
+		t.Fatalf("Failed to connect with valid auth header: %v", err)
+	}
+	conn2.Close()
+}
+
 func init() {
 	// Suppress log noise during tests
 	log.SetOutput(io.Discard)

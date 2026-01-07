@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,10 +76,35 @@ func (h *Host) Broadcast(mt int, data []byte) {
 	}
 }
 
+// Authenticator defines an interface for authenticating gateway connections.
+type Authenticator interface {
+	Authenticate(r *http.Request) error
+}
+
+// TokenAuthenticator simple static token authenticator.
+type TokenAuthenticator struct {
+	Token string
+}
+
+func (a *TokenAuthenticator) Authenticate(r *http.Request) error {
+	token := r.Header.Get("Authorization")
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
+	if !strings.HasPrefix(token, "Bearer ") {
+		token = "Bearer " + token
+	}
+	if token != "Bearer "+a.Token {
+		return fmt.Errorf("invalid or missing token")
+	}
+	return nil
+}
+
 // Hub maintains the set of active host connections.
 type Hub struct {
-	mu    sync.RWMutex
-	hosts map[string]*Host
+	mu            sync.RWMutex
+	hosts         map[string]*Host
+	Authenticator Authenticator
 }
 
 func NewHub() *Hub {
@@ -122,6 +149,15 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	if serverName == "" {
 		http.Error(w, "missing server query param", http.StatusBadRequest)
 		return
+	}
+
+	// Perform authentication check before upgrade
+	if hub.Authenticator != nil {
+		if err := hub.Authenticator.Authenticate(r); err != nil {
+			log.Printf("Authentication failed for %s (%s): %v", serverName, role, err)
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
 	}
 
 	conn, err := Upgrader.Upgrade(w, r, nil)
