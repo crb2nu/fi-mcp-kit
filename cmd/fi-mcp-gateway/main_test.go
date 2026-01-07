@@ -154,6 +154,51 @@ func TestGatewayAuthentication(t *testing.T) {
 	}
 	conn2.Close()
 }
+func TestGatewayRedaction(t *testing.T) {
+	hub := gateway.NewHub()
+	hub.Redactor = gateway.NewRedactor()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gateway.Handler(hub, w, r)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+
+	// Connect Host
+	hostConn, _, err := websocket.DefaultDialer.Dial(wsURL+"?server=test-server&role=host", nil)
+	if err != nil {
+		t.Fatalf("Failed to connect host: %v", err)
+	}
+	defer hostConn.Close()
+
+	// Connect Client
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL+"?server=test-server&role=client", nil)
+	if err != nil {
+		t.Fatalf("Failed to connect client: %v", err)
+	}
+	defer clientConn.Close()
+
+	// Test message with a secret
+	secretKey := "sk-1234567890abcdef12345678"
+	msgWithSecret := "User requested key: " + secretKey
+	if err := clientConn.WriteMessage(websocket.TextMessage, []byte(msgWithSecret)); err != nil {
+		t.Fatalf("Client failed to send: %v", err)
+	}
+
+	_, p, err := hostConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Host failed to read: %v", err)
+	}
+
+	receivedMsg := string(p)
+	if strings.Contains(receivedMsg, secretKey) {
+		t.Errorf("Secret key was not redacted! Received: %q", receivedMsg)
+	}
+	if !strings.Contains(receivedMsg, "[REDACTED]") {
+		t.Errorf("Message does not contain [REDACTED] placeholder: %q", receivedMsg)
+	}
+}
 
 func init() {
 	// Suppress log noise during tests

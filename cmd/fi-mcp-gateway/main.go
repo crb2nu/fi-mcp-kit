@@ -30,6 +30,7 @@ func main() {
 	}
 
 	hub := gateway.NewHub()
+	hub.Redactor = gateway.NewRedactor()
 
 	// Configure authentication if token is provided via env
 	if token := os.Getenv("HUB_TOKEN"); token != "" {

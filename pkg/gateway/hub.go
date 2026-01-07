@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -101,11 +102,38 @@ func (a *TokenAuthenticator) Authenticate(r *http.Request) error {
 	return nil
 }
 
+// CertAuthenticator authenticates based on client certificates (mTLS).
+type CertAuthenticator struct {
+	AllowedCommonNames []string
+}
+
+func (a *CertAuthenticator) Authenticate(r *http.Request) error {
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return errors.New("no client certificates provided")
+	}
+
+	if len(a.AllowedCommonNames) == 0 {
+		// If no list provided, allow any valid certificate
+		return nil
+	}
+
+	for _, cert := range r.TLS.PeerCertificates {
+		for _, cn := range a.AllowedCommonNames {
+			if cert.Subject.CommonName == cn {
+				return nil
+			}
+		}
+	}
+
+	return errors.New("certificate common name not allowed")
+}
+
 // Hub maintains the set of active host connections.
 type Hub struct {
 	mu            sync.RWMutex
 	hosts         map[string]*Host
 	Authenticator Authenticator
+	Redactor      *Redactor
 }
 
 func NewHub() *Hub {
@@ -210,6 +238,9 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 				log.Printf("Host %s disconnected: %v", serverName, err)
 				break
 			}
+			if hub.Redactor != nil {
+				message = hub.Redactor.Redact(message)
+			}
 			host.Broadcast(mt, message)
 		}
 	} else {
@@ -254,6 +285,9 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Printf("Client of %s disconnected: %v", serverName, err)
 				break
+			}
+			if hub.Redactor != nil {
+				message = hub.Redactor.Redact(message)
 			}
 			if err := host.Send(mt, message); err != nil {
 				log.Printf("Error relaying to host %s: %v", serverName, err)
