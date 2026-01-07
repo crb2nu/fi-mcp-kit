@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/gateway"
 )
 
@@ -19,6 +20,16 @@ var (
 
 func main() {
 	flag.Parse()
+
+	tp, err := gateway.InitTracer()
+	if err != nil {
+		log.Fatalf("InitTracer: %v", err)
+	}
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Printf("tp.Shutdown: %v", err)
+		}
+	}()
 
 	defaultAddr := *addr
 	if envPort := os.Getenv("PORT"); envPort != "" {
@@ -45,6 +56,8 @@ func main() {
 	http.HandleFunc("/hosts", func(w http.ResponseWriter, r *http.Request) {
 		gateway.HostsHandler(hub, w, r)
 	})
+
+	http.Handle("/metrics", promhttp.Handler())
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

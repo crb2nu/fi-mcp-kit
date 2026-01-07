@@ -151,6 +151,7 @@ func (h *Hub) RegisterHost(serverName string, conn *websocket.Conn) *Host {
 	}
 	host := NewHost(serverName, conn)
 	h.hosts[serverName] = host
+	HostsConnected.Inc()
 	log.Printf("Host registered: %s", serverName)
 	return host
 }
@@ -160,6 +161,7 @@ func (h *Hub) UnregisterHost(serverName string) {
 	defer h.mu.Unlock()
 	if _, ok := h.hosts[serverName]; ok {
 		delete(h.hosts, serverName)
+		HostsConnected.Dec()
 		log.Printf("Host unregistered: %s", serverName)
 	}
 }
@@ -182,6 +184,9 @@ func (h *Hub) ListHosts() []string {
 
 // Handler handles WebSocket connections for the gateway.
 func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	ctx, span := Tracer().Start(r.Context(), "Handler")
+	defer span.End()
+
 	serverName := r.URL.Query().Get("server")
 	role := r.URL.Query().Get("role")
 
@@ -238,10 +243,13 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 				log.Printf("Host %s disconnected: %v", serverName, err)
 				break
 			}
+			_, lSpan := Tracer().Start(ctx, "relay_host_to_clients")
 			if hub.Redactor != nil {
 				message = hub.Redactor.Redact(message)
 			}
+			MessagesRelayed.WithLabelValues("host_to_client", serverName).Inc()
 			host.Broadcast(mt, message)
+			lSpan.End()
 		}
 	} else {
 		// Client role (default)
@@ -255,8 +263,10 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 		client := &Client{conn: conn}
 		host.AddClient(client)
+		ClientsConnected.Inc()
 		defer func() {
 			host.RemoveClient(client)
+			ClientsConnected.Dec()
 			conn.Close()
 		}()
 
@@ -286,13 +296,18 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 				log.Printf("Client of %s disconnected: %v", serverName, err)
 				break
 			}
+			_, lSpan := Tracer().Start(ctx, "relay_client_to_host")
 			if hub.Redactor != nil {
 				message = hub.Redactor.Redact(message)
 			}
+			MessagesRelayed.WithLabelValues("client_to_host", serverName).Inc()
 			if err := host.Send(mt, message); err != nil {
 				log.Printf("Error relaying to host %s: %v", serverName, err)
+				RelayErrors.WithLabelValues(serverName).Inc()
+				lSpan.End()
 				break
 			}
+			lSpan.End()
 		}
 	}
 }
