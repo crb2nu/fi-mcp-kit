@@ -100,6 +100,12 @@ func New(cfg Config) *Router {
 	return r
 }
 
+func (r *Router) HubEnabled() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.hubEnabled
+}
+
 // Route decides where to send a request.
 func (r *Router) Route(ctx context.Context, serverName string) (*RouteDecision, error) {
 	_ = ctx
@@ -143,6 +149,12 @@ func (r *Router) Route(ctx context.Context, serverName string) (*RouteDecision, 
 	localHealth := r.localHealth[serverName]
 	hubHealth := r.hubHealth[serverName]
 
+	// If server is hub-bound and hub is enabled, prefer hub
+	if server.IsHubCapable() && !server.IsLocalOnly() && r.hubEnabled && r.isHealthy(hubHealth) {
+		// We still try local first if it's healthy, unless it's explicitly NOT local-only but hub-preferred.
+		// For now, let's stick to local-first if healthy of Hub-fallback.
+	}
+
 	if r.isHealthy(localHealth) {
 		return &RouteDecision{
 			Target:     TargetLocal,
@@ -155,7 +167,7 @@ func (r *Router) Route(ctx context.Context, serverName string) (*RouteDecision, 
 		return &RouteDecision{
 			Target:     TargetHub,
 			ServerName: serverName,
-			Reason:     fmt.Sprintf("local unhealthy (%s), hub fallback", localHealth.ErrorMessage),
+			Reason:     fmt.Sprintf("local unhealthy (%s) or missing, hub fallback", localHealth.ErrorMessage),
 		}, nil
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,7 @@ type Config struct {
 	ProxyName    string
 	ProxyVersion string
 	HubURL       string
+	HubToken     string
 }
 
 type Proxy struct {
@@ -113,6 +115,10 @@ func (p *Proxy) dialHub(ctx context.Context, serverName string) (mcp.Transport, 
 		u += "?server=" + serverName
 	}
 
+	if p.cfg.HubToken != "" {
+		u += "&token=" + p.cfg.HubToken
+	}
+
 	transport, err := mcp.NewWebSocketTransport(ctx, mcp.WebSocketConfig{
 		URL:        u,
 		ClientInfo: mcp.ClientInfo{Name: p.cfg.ProxyName, Version: p.cfg.ProxyVersion},
@@ -177,6 +183,10 @@ func (p *Proxy) Prepare(ctx context.Context) error {
 				return b.callTool(ctx, toolName, args)
 			})
 		}
+	}
+
+	if err := p.discoverHubTools(ctx); err != nil {
+		log.Printf("Hub discovery failed: %v", err)
 	}
 
 	return nil

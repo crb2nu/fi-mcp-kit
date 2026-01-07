@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -141,6 +142,16 @@ func (h *Hub) GetHost(serverName string) *Host {
 	return h.hosts[serverName]
 }
 
+func (h *Hub) ListHosts() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	hosts := make([]string, 0, len(h.hosts))
+	for name := range h.hosts {
+		hosts = append(hosts, name)
+	}
+	return hosts
+}
+
 // Handler handles WebSocket connections for the gateway.
 func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	serverName := r.URL.Query().Get("server")
@@ -250,4 +261,18 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// HostsHandler returns a JSON list of registered host names.
+func HostsHandler(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	if hub.Authenticator != nil {
+		if err := hub.Authenticator.Authenticate(r); err != nil {
+			log.Printf("Discovery authentication failed: %v", err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(hub.ListHosts())
 }

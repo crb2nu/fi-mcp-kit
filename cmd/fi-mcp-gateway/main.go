@@ -25,6 +25,10 @@ func main() {
 		gateway.Handler(hub, w, r)
 	})
 
+	http.HandleFunc("/hosts", func(w http.ResponseWriter, r *http.Request) {
+		gateway.HostsHandler(hub, w, r)
+	})
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))

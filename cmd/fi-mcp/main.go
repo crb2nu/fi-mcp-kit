@@ -220,6 +220,7 @@ func runProxy(args []string) int {
 	name := fs.String("name", "fi-mcp", "Proxy server name")
 	version := fs.String("version", "0.0.0-dev", "Proxy server version")
 	hubURL := fs.String("hub-url", "", "Hub WebSocket URL (e.g. wss://mcp.flexinfer.ai/ws)")
+	hubToken := fs.String("hub-token", "", "Authentication token for the MCP hub")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -238,6 +239,7 @@ func runProxy(args []string) int {
 		ProxyName:    *name,
 		ProxyVersion: *version,
 		HubURL:       *hubURL,
+		HubToken:     *hubToken,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxy init failed: %v\n", err)
