@@ -3,6 +3,9 @@ include:
   - project: 'platform/gitops'
     file: '/ci/templates/go.yml'
 
+default:
+  image: golang:1.24
+
 stages: [lint, test, build]
 
 lint:
