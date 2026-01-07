@@ -19,7 +19,23 @@ var (
 
 func main() {
 	flag.Parse()
+
+	defaultAddr := *addr
+	if envPort := os.Getenv("PORT"); envPort != "" {
+		if envPort[0] != ':' {
+			defaultAddr = ":" + envPort
+		} else {
+			defaultAddr = envPort
+		}
+	}
+
 	hub := gateway.NewHub()
+
+	// Configure authentication if token is provided via env
+	if token := os.Getenv("HUB_TOKEN"); token != "" {
+		log.Println("Enabling Token Authentication")
+		hub.Authenticator = &gateway.TokenAuthenticator{Token: token}
+	}
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		gateway.Handler(hub, w, r)
@@ -34,10 +50,10 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	server := &http.Server{Addr: *addr}
+	server := &http.Server{Addr: defaultAddr}
 
 	go func() {
-		log.Printf("Gateway listening on %s", *addr)
+		log.Printf("Gateway listening on %s", defaultAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("ListenAndServe: %v", err)
 		}

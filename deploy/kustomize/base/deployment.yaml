@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fi-mcp-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fi-mcp-gateway
+  template:
+    metadata:
+      labels:
+        app: fi-mcp-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: registry.flexinfer.ai/libs/fi-mcp-gateway:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: HUB_TOKEN
+              value: ""
+            - name: PORT
+              value: "8080"

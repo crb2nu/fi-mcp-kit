@@ -1,0 +1,6 @@
+apiVersion: v2
+name: fi-mcp-gateway
+description: A Go-native Model Context Protocol (MCP) gateway for session multiplexing.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
