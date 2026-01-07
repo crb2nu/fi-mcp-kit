@@ -10,12 +10,15 @@ stages: [lint, test, build]
 
 lint:
   extends: .go-lint
+  image: golang:1.24
 
 test:
   extends: .go-test
+  image: golang:1.24
 
 build:cli:
   extends: .go-build
+  image: golang:1.24
   script:
     - CGO_ENABLED=0 go build -ldflags="-s -w" -o fi-mcp ./cmd/fi-mcp
   artifacts:
