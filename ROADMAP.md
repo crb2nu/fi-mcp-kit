@@ -10,6 +10,8 @@ To be the enterprise-grade orchestration toolkit for the Model Context Protocol 
 - **Registry**: Schema validation and policy enforcement (local vs hub).
 - **Secrets**: Abstractions for Env/File/Vault injection.
 - **Proxy**: Local multiplexer with basic tool discovery.
+- **Pool**: Generic connection pooling with idle reaping (`pkg/pool`).
+- **Process**: Local process management (`pkg/process`).
 
 ## Immediate Priorities (Q1 2026)
 
@@ -22,7 +24,7 @@ To be the enterprise-grade orchestration toolkit for the Model Context Protocol 
 
 ### Connection & Reliability
 
-- [ ] **Connection Pooling**: Implement pooling for gateway backends and proxy processes with idle timeouts.
+- [x] **Connection Pooling**: Implement pooling for gateway backends and proxy processes with idle timeouts.
 - [ ] **Backpressure**: Robust backpressure handling in the proxy layer.
 
 ## Future Milestones
