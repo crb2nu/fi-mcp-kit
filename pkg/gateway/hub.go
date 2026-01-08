@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/gateway/auth"
 )
 
 var Upgrader = websocket.Upgrader{
@@ -25,6 +26,7 @@ var Upgrader = websocket.Upgrader{
 type Client struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
+	Auth *auth.AuthContext
 }
 
 func (c *Client) Send(mt int, data []byte) error {
@@ -40,13 +42,15 @@ type Host struct {
 	mu      sync.Mutex
 	clients map[*Client]bool
 	cMu     sync.RWMutex
+	Auth    *auth.AuthContext
 }
 
-func NewHost(name string, conn *websocket.Conn) *Host {
+func NewHost(name string, conn *websocket.Conn, auth *auth.AuthContext) *Host {
 	return &Host{
 		name:    name,
 		conn:    conn,
 		clients: make(map[*Client]bool),
+		Auth:    auth,
 	}
 }
 
@@ -133,23 +137,25 @@ type Hub struct {
 	mu            sync.RWMutex
 	hosts         map[string]*Host
 	Authenticator Authenticator
+	AuthHook      auth.Hook
 	Redactor      *Redactor
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		hosts: make(map[string]*Host),
+		hosts:    make(map[string]*Host),
+		AuthHook: &auth.NoOpHook{},
 	}
 }
 
-func (h *Hub) RegisterHost(serverName string, conn *websocket.Conn) *Host {
+func (h *Hub) RegisterHost(serverName string, conn *websocket.Conn, auth *auth.AuthContext) *Host {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if old, ok := h.hosts[serverName]; ok {
 		log.Printf("Replacing existing host for %s", serverName)
 		old.conn.Close()
 	}
-	host := NewHost(serverName, conn)
+	host := NewHost(serverName, conn, auth)
 	h.hosts[serverName] = host
 	HostsConnected.Inc()
 	log.Printf("Host registered: %s", serverName)
@@ -204,6 +210,17 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var authCtx *auth.AuthContext
+	if hub.AuthHook != nil {
+		var err error
+		authCtx, err = hub.AuthHook.OnConnect(r.Context(), r)
+		if err != nil {
+			log.Printf("Auth hook rejected %s: %v", serverName, err)
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+	}
+
 	conn, err := Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("upgrade error: %v", err)
@@ -211,7 +228,7 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if role == "host" {
-		host := hub.RegisterHost(serverName, conn)
+		host := hub.RegisterHost(serverName, conn, authCtx)
 		defer func() {
 			hub.UnregisterHost(serverName)
 			conn.Close()
@@ -244,6 +261,15 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			_, lSpan := Tracer().Start(ctx, "relay_host_to_clients")
+			
+			if hub.AuthHook != nil {
+				if err := hub.AuthHook.OnMessage(ctx, authCtx, message); err != nil {
+					log.Printf("Message rejected by auth hook: %v", err)
+					lSpan.End()
+					continue
+				}
+			}
+
 			if hub.Redactor != nil {
 				message = hub.Redactor.Redact(message)
 			}
@@ -261,7 +287,7 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		client := &Client{conn: conn}
+		client := &Client{conn: conn, Auth: authCtx}
 		host.AddClient(client)
 		ClientsConnected.Inc()
 		defer func() {
@@ -297,6 +323,15 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			_, lSpan := Tracer().Start(ctx, "relay_client_to_host")
+			
+			if hub.AuthHook != nil {
+				if err := hub.AuthHook.OnMessage(ctx, authCtx, message); err != nil {
+					log.Printf("Message rejected by auth hook: %v", err)
+					lSpan.End()
+					continue
+				}
+			}
+
 			if hub.Redactor != nil {
 				message = hub.Redactor.Redact(message)
 			}
