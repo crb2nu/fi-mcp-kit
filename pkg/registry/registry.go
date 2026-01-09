@@ -84,6 +84,21 @@ type Registry struct {
 	Version    int               `yaml:"version"`
 	EnvAliases map[string]EnvVar `yaml:"env_aliases,omitempty"`
 	Servers    []*Server         `yaml:"servers"`
+	Routing    []*RoutingRule    `yaml:"routing,omitempty"`
+}
+
+// RoutingRule defines how to route a tool call based on its arguments.
+type RoutingRule struct {
+	ToolName string        `yaml:"tool"`
+	Argument string        `yaml:"argument"`
+	Cases    []RoutingCase `yaml:"cases"`
+	Default  string        `yaml:"default,omitempty"`
+}
+
+// RoutingCase defines a single match case for routing.
+type RoutingCase struct {
+	Match  string `yaml:"match"`  // Glob pattern or exact value
+	Server string `yaml:"server"` // Target server name
 }
 
 // EnvVar defines an environment variable with fallback names.
