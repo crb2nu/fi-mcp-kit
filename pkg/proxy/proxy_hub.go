@@ -17,41 +17,12 @@ func (p *Proxy) discoverHubTools(ctx context.Context) error {
 		return nil
 	}
 
-	// 1. Fetch hosts from gateway
-	hostsURL := p.cfg.HubURL
-	if strings.HasPrefix(hostsURL, "ws") {
-		hostsURL = "http" + strings.TrimPrefix(hostsURL, "ws")
-	}
-	// Trim /ws suffix if present to get base URL
-	hostsURL = strings.TrimSuffix(hostsURL, "/ws")
-	hostsURL += "/hosts"
+	client := router.NewHubClient(p.cfg.HubURL, p.cfg.HubToken)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", hostsURL, nil)
+	// 1. Fetch hosts from gateway
+	hostNames, err := client.DiscoverHosts(ctx)
 	if err != nil {
 		return err
-	}
-	if p.cfg.HubToken != "" {
-		req.Header.Set("Authorization", "Bearer "+p.cfg.HubToken)
-		// Also try query param for compatibility if needed, but header is standard
-		q := req.URL.Query()
-		q.Add("token", p.cfg.HubToken)
-		req.URL.RawQuery = q.Encode()
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("fetch hub hosts: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("fetch hub hosts failed (%d): %s", resp.StatusCode, string(body))
-	}
-
-	var hostNames []string
-	if err := json.NewDecoder(resp.Body).Decode(&hostNames); err != nil {
-		return fmt.Errorf("decode hub hosts: %w", err)
 	}
 
 	log.Printf("Discovered %d remote hosts on hub", len(hostNames))
@@ -59,12 +30,9 @@ func (p *Proxy) discoverHubTools(ctx context.Context) error {
 	// 2. Prepare tools for each remote host
 	for _, name := range hostNames {
 		log.Printf("Auto-bridging remote host: %s", name)
-		var tools []mcp.Tool
-		err := p.withBackend(ctx, name, func(b *backend) error {
-			var err error
-			tools, err = b.listTools(ctx)
-			return err
-		})
+		
+		// Fetch tools from Hub
+		tools, err := client.FetchTools(ctx, name)
 		if err != nil {
 			log.Printf("Failed to bridge remote host %s: %v", name, err)
 			continue

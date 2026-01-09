@@ -4,12 +4,16 @@ package router
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/registry"
 	"gitlab.flexinfer.ai/libs/mcp-go"
 )
+
+// ToolIndex maps tool names to the servers that provide them.
+type ToolIndex map[string][]string
 
 // RouteDecision describes where to route a request.
 type RouteDecision struct {
@@ -60,6 +64,8 @@ type Router struct {
 
 	failureThreshold int
 	recoveryTime     time.Duration
+
+	toolIndex ToolIndex
 }
 
 // Config configures the router.
@@ -88,6 +94,7 @@ func New(cfg Config) *Router {
 		hubURL:           cfg.HubURL,
 		failureThreshold: cfg.FailureThreshold,
 		recoveryTime:     cfg.RecoveryTime,
+		toolIndex:        make(ToolIndex),
 	}
 
 	if cfg.Registry != nil {
@@ -95,6 +102,7 @@ func New(cfg Config) *Router {
 			r.localHealth[srv.Name] = &Health{Healthy: true}
 			r.hubHealth[srv.Name] = &Health{Healthy: true}
 		}
+		r.BuildToolIndex()
 	}
 
 	return r
@@ -104,6 +112,140 @@ func (r *Router) HubEnabled() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.hubEnabled
+}
+
+// BuildToolIndex populates the in-memory index of available tools.
+func (r *Router) BuildToolIndex() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.registry == nil {
+		return
+	}
+
+	r.toolIndex = make(ToolIndex)
+	for _, srv := range r.registry.Servers {
+		if srv == nil {
+			continue
+		}
+
+		// Check Common config
+		if srv.Common != nil {
+			for _, tool := range srv.Common.Tools {
+				r.addToolToIndex(tool.Name, srv.Name)
+			}
+		}
+
+		// Check target-specific configs
+		if srv.Targets != nil {
+			for _, target := range srv.Targets {
+				if target != nil {
+					for _, tool := range target.Tools {
+						r.addToolToIndex(tool.Name, srv.Name)
+					}
+				}
+			}
+		}
+	}
+}
+
+func (r *Router) addToolToIndex(toolName, serverName string) {
+	servers, ok := r.toolIndex[toolName]
+	if !ok {
+		r.toolIndex[toolName] = []string{serverName}
+		return
+	}
+
+	for _, s := range servers {
+		if s == serverName {
+			return
+		}
+	}
+	r.toolIndex[toolName] = append(servers, serverName)
+}
+
+// AddToolToIndex adds a tool to the global index for smart routing.
+func (r *Router) AddToolToIndex(toolName, serverName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.addToolToIndex(toolName, serverName)
+}
+
+// ResolveServer determines the best server for a given tool name and arguments.
+func (r *Router) ResolveServer(profile, toolName string, args map[string]any) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.registry == nil {
+		return "", nil
+	}
+
+	// 1. Check Explicit Routing Rules
+	for _, rule := range r.registry.Routing {
+		if rule == nil || rule.ToolName != toolName {
+			continue
+		}
+
+		argVal, ok := args[rule.Argument].(string)
+		if ok {
+			for _, c := range rule.Cases {
+				if matchPattern(argVal, c.Match) {
+					return c.Server, nil
+				}
+			}
+		}
+
+		if rule.Default != "" {
+			return rule.Default, nil
+		}
+	}
+
+	// 2. Check AlwaysAllow & Prefix
+	for _, srv := range r.registry.Servers {
+		if srv == nil {
+			continue
+		}
+
+		spec, err := r.registry.GetServerSpec(srv.Name, profile)
+		if err == nil && spec != nil {
+			for _, allowed := range spec.AlwaysAllow {
+				if allowed == toolName {
+					return srv.Name, nil
+				}
+			}
+		}
+
+		prefix := srv.Name + "__"
+		if strings.HasPrefix(toolName, prefix) {
+			return srv.Name, nil
+		}
+	}
+
+	// 3. Check Tool Index
+	servers, ok := r.toolIndex[toolName]
+	if ok {
+		if len(servers) == 1 {
+			return servers[0], nil
+		}
+		if len(servers) > 1 {
+			return "", fmt.Errorf("ambiguous tool %q provided by multiple servers: %v", toolName, servers)
+		}
+	}
+
+	return "", nil
+}
+
+func matchPattern(value, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(value, strings.TrimSuffix(pattern, "*"))
+	}
+	if strings.HasPrefix(pattern, "*") {
+		return strings.HasSuffix(value, strings.TrimPrefix(pattern, "*"))
+	}
+	return value == pattern
 }
 
 // Route decides where to send a request.
