@@ -186,12 +186,14 @@ func (p *Proxy) dialHub(ctx context.Context, serverName string) (mcp.Transport, 
 		u += "?server=" + serverName
 	}
 
+	headers := make(map[string]string)
 	if p.cfg.HubToken != "" {
-		u += "&token=" + p.cfg.HubToken
+		headers["Authorization"] = "Bearer " + p.cfg.HubToken
 	}
 
 	transport, err := mcp.NewWebSocketTransport(ctx, mcp.WebSocketConfig{
 		URL:        u,
+		Headers:    headers,
 		ClientInfo: mcp.ClientInfo{Name: p.cfg.ProxyName, Version: p.cfg.ProxyVersion},
 	}, serverName)
 	if err != nil {
