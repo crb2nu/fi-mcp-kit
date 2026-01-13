@@ -1,13 +1,13 @@
 module gitlab.flexinfer.ai/libs/fi-mcp-kit
 
-go 1.24.0
+go 1.25.5
 
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
-	gitlab.flexinfer.ai/libs/mcp-go v0.2.0
+	gitlab.flexinfer.ai/libs/mcp-go v0.2.1-0.20260109074210-96a844bee930
 	go.opentelemetry.io/otel v1.39.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.39.0
 	go.opentelemetry.io/otel/sdk v1.39.0
@@ -15,8 +15,6 @@ require (
 	golang.org/x/crypto v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 )
-
-replace gitlab.flexinfer.ai/libs/mcp-go => ../mcp-go
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect

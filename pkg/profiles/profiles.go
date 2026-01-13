@@ -102,7 +102,7 @@ func (m *Manager) loadDefaults() {
 	m.profiles["full"] = &Profile{
 		Name:        "full",
 		Description: "All available tools with smart prioritization",
-		MaxTools:    100,
+		MaxTools:    500,
 		Include: IncludeSpec{
 			Servers: []string{"*"}, // All servers
 		},
