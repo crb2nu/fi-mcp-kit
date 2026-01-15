@@ -11,6 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const k8sSharedSecretsName = "mcp-secrets"
+
 type GatewayManifests struct {
 	Enabled bool
 
@@ -126,6 +128,83 @@ func getServerType(spec *registry.TargetSpec) string {
 	return "custom"
 }
 
+type secretToken struct {
+	kind       string
+	key        string
+	def        string
+	hasDefault bool
+}
+
+func parseSecretToken(value string) (secretToken, bool) {
+	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
+		return secretToken{}, false
+	}
+
+	body := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+	parts := strings.SplitN(body, ":", 2)
+	if len(parts) != 2 {
+		return secretToken{}, false
+	}
+
+	kind := parts[0]
+	if kind != "env" && kind != "keychain" && kind != "secret" {
+		return secretToken{}, false
+	}
+
+	rest := parts[1]
+	if rest == "" {
+		return secretToken{}, false
+	}
+
+	if idx := strings.Index(rest, ":-"); idx >= 0 {
+		key := rest[:idx]
+		def := rest[idx+2:]
+		if key == "" {
+			return secretToken{}, false
+		}
+		return secretToken{
+			kind:       kind,
+			key:        key,
+			def:        def,
+			hasDefault: true,
+		}, true
+	}
+
+	return secretToken{kind: kind, key: rest}, true
+}
+
+func k8sEnvVarFromRegistry(name string, rawValue string) map[string]any {
+	// Resolve safe path placeholders, but preserve secret token patterns.
+	value := ResolveTokens(rawValue, "", "cluster")
+
+	// Convert secret tokens into Kubernetes-native secret refs.
+	if tok, ok := parseSecretToken(value); ok {
+		if tok.hasDefault {
+			// K8s env vars don't support "secret with default". For cluster manifests,
+			// materialize the default and let overlays/patches override if needed.
+			return map[string]any{
+				"name":  name,
+				"value": ResolveTokens(tok.def, "", "cluster"),
+			}
+		}
+
+		return map[string]any{
+			"name": name,
+			"valueFrom": map[string]any{
+				"secretKeyRef": map[string]any{
+					"name": k8sSharedSecretsName,
+					"key":  tok.key,
+				},
+			},
+		}
+	}
+
+	return map[string]any{
+		"name":  name,
+		"value": value,
+	}
+}
+
 func createDeployment(server *registry.Server, namespace, imageRegistry string) (map[string]any, error) {
 	k8sName := sanitizeName(server.Name)
 	spec := server.Common
@@ -144,12 +223,16 @@ func createDeployment(server *registry.Server, namespace, imageRegistry string) 
 		image = fmt.Sprintf("%s/custom-server:latest", imageRegistry)
 	}
 
-	envVars := []map[string]string{}
-	for k, v := range spec.Env {
-		envVars = append(envVars, map[string]string{
-			"name":  k,
-			"value": ResolveTokens(v, "", "cluster"),
-		})
+	envVars := []map[string]any{}
+	if len(spec.Env) > 0 {
+		keys := make([]string, 0, len(spec.Env))
+		for k := range spec.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			envVars = append(envVars, k8sEnvVarFromRegistry(k, spec.Env[k]))
+		}
 	}
 
 	defaults := map[string]string{
@@ -160,11 +243,14 @@ func createDeployment(server *registry.Server, namespace, imageRegistry string) 
 	}
 	existing := make(map[string]bool)
 	for _, e := range envVars {
-		existing[e["name"]] = true
+		n, _ := e["name"].(string)
+		if n != "" {
+			existing[n] = true
+		}
 	}
 	for k, v := range defaults {
 		if !existing[k] {
-			envVars = append(envVars, map[string]string{"name": k, "value": v})
+			envVars = append(envVars, map[string]any{"name": k, "value": v})
 		}
 	}
 
@@ -180,7 +266,7 @@ func createDeployment(server *registry.Server, namespace, imageRegistry string) 
 		cmdParts = append(cmdParts, ResolveArgs(spec.Args, "", "cluster")...)
 		fullCmd := strings.Join(cmdParts, " ")
 		if fullCmd != "" {
-			envVars = append(envVars, map[string]string{
+			envVars = append(envVars, map[string]any{
 				"name":  "MCP_SERVER_COMMAND",
 				"value": fullCmd,
 			})
