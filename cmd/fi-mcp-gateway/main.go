@@ -12,10 +12,14 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/gateway"
+	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/registry"
 )
 
 var (
-	addr = flag.String("addr", ":8080", "http service address")
+	addr            = flag.String("addr", "", "DEPRECATED: use --listen")
+	listen          = flag.String("listen", ":8080", "HTTP listen address (e.g. :8080)")
+	registryPath    = flag.String("registry", "", "Path to registry.yaml (enables server allowlist + safe proxy routing)")
+	backendTemplate = flag.String("backend-template", "", "Backend websocket URL template (default: ws://{server}:8080/ws)")
 )
 
 func main() {
@@ -31,7 +35,10 @@ func main() {
 		}
 	}()
 
-	defaultAddr := *addr
+	defaultAddr := *listen
+	if *addr != "" {
+		defaultAddr = *addr
+	}
 	if envPort := os.Getenv("PORT"); envPort != "" {
 		if envPort[0] != ':' {
 			defaultAddr = ":" + envPort
@@ -42,9 +49,22 @@ func main() {
 
 	hub := gateway.NewHub()
 	hub.Redactor = gateway.NewRedactor()
+	hub.BackendURLTemplate = *backendTemplate
+
+	if p := *registryPath; p != "" {
+		reg, err := registry.Load(p)
+		if err != nil {
+			log.Fatalf("Load registry: %v", err)
+		}
+		hub.Registry = reg
+	}
 
 	// Configure authentication if token is provided via env
-	if token := os.Getenv("HUB_TOKEN"); token != "" {
+	token := os.Getenv("HUB_TOKEN")
+	if token == "" {
+		token = os.Getenv("FI_MCP_HUB_TOKEN")
+	}
+	if token != "" {
 		log.Println("Enabling Token Authentication")
 		hub.Authenticator = &gateway.TokenAuthenticator{Token: token}
 	}

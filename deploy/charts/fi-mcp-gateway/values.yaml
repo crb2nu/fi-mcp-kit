@@ -59,4 +59,10 @@ affinity: {}
 # Gateway specific configuration
 config:
   hubToken: "" # Provide via --set config.hubToken or secret
-  port: 8080
+  listen: ":8080"
+  backendTemplate: "" # Default: ws://{server}:8080/ws
+  registry:
+    enabled: false
+    existingConfigMap: "" # If empty and enabled=true, chart will create one from registryYaml
+    key: registry.yaml
+    registryYaml: "" # Inline registry.yaml (only used when enabled=true and existingConfigMap is empty)

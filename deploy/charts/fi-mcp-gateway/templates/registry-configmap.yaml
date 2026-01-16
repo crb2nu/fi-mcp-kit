@@ -1,0 +1,17 @@
+{{- if and .Values.config.registry.enabled (not .Values.config.registry.existingConfigMap) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "..fullname" . }}-registry
+  labels:
+    {{- include "..labels" . | nindent 4 }}
+data:
+  {{ .Values.config.registry.key }}: |
+{{- if .Values.config.registry.registryYaml }}
+{{ .Values.config.registry.registryYaml | nindent 4 }}
+{{- else }}
+    version: 1
+    servers: []
+{{- end }}
+{{- end }}
+

@@ -40,6 +40,17 @@ spec:
           {{- end }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --listen
+            - {{ .Values.config.listen | quote }}
+            {{- if .Values.config.backendTemplate }}
+            - --backend-template
+            - {{ .Values.config.backendTemplate | quote }}
+            {{- end }}
+            {{- if .Values.config.registry.enabled }}
+            - --registry
+            - /config/registry.yaml
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -47,8 +58,10 @@ spec:
           env:
             - name: HUB_TOKEN
               value: {{ .Values.config.hubToken | quote }}
+            - name: FI_MCP_HUB_TOKEN
+              value: {{ .Values.config.hubToken | quote }}
             - name: PORT
-              value: {{ .Values.config.port | quote }}
+              value: {{ .Values.service.port | quote }}
           {{- with .Values.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
@@ -61,13 +74,30 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.volumeMounts }}
+          {{- if or .Values.volumeMounts .Values.config.registry.enabled }}
           volumeMounts:
+            {{- if .Values.config.registry.enabled }}
+            - name: registry
+              mountPath: /config
+              readOnly: true
+            {{- end }}
+            {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
-      {{- with .Values.volumes }}
+      {{- if or .Values.volumes .Values.config.registry.enabled }}
       volumes:
+        {{- if .Values.config.registry.enabled }}
+        - name: registry
+          configMap:
+            name: {{ default (printf "%s-registry" (include "..fullname" .)) .Values.config.registry.existingConfigMap }}
+            items:
+              - key: {{ .Values.config.registry.key | quote }}
+                path: registry.yaml
+        {{- end }}
+        {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/gateway/auth"
+	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/registry"
 )
 
 var Upgrader = websocket.Upgrader{
@@ -139,6 +141,19 @@ type Hub struct {
 	Authenticator Authenticator
 	AuthHook      auth.Hook
 	Redactor      *Redactor
+
+	// Registry optionally restricts which servers can be proxied.
+	// When set, only servers in the registry (or connected as hosts) are allowed.
+	Registry *registry.Registry
+
+	// BackendURLTemplate is a websocket URL template used when the requested server is not connected
+	// as a registered host. It must be a websocket URL (ws:// or wss://) and may contain "{server}".
+	// Default: ws://{server}:8080/ws
+	BackendURLTemplate string
+
+	// Dialer is used for outbound backend websocket connections (reverse-proxy mode).
+	// If nil, websocket.DefaultDialer is used.
+	Dialer *websocket.Dialer
 }
 
 func NewHub() *Hub {
@@ -178,14 +193,69 @@ func (h *Hub) GetHost(serverName string) *Host {
 	return h.hosts[serverName]
 }
 
+func (h *Hub) isAllowedServer(serverName string) bool {
+	h.mu.RLock()
+	if _, ok := h.hosts[serverName]; ok {
+		h.mu.RUnlock()
+		return true
+	}
+	reg := h.Registry
+	h.mu.RUnlock()
+
+	if reg == nil {
+		return false
+	}
+	for _, s := range reg.Servers {
+		if s != nil && s.Name == serverName {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Hub) ListHosts() []string {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	hosts := make([]string, 0, len(h.hosts))
+	hostsMap := make(map[string]struct{}, len(h.hosts))
 	for name := range h.hosts {
+		hostsMap[name] = struct{}{}
+	}
+	reg := h.Registry
+	h.mu.RUnlock()
+
+	if reg != nil {
+		for _, srv := range reg.Servers {
+			if srv != nil && strings.TrimSpace(srv.Name) != "" {
+				hostsMap[srv.Name] = struct{}{}
+			}
+		}
+	}
+
+	hosts := make([]string, 0, len(hostsMap))
+	for name := range hostsMap {
 		hosts = append(hosts, name)
 	}
 	return hosts
+}
+
+func (h *Hub) backendURL(serverName string) (string, error) {
+	h.mu.RLock()
+	tpl := strings.TrimSpace(h.BackendURLTemplate)
+	h.mu.RUnlock()
+
+	if tpl == "" {
+		tpl = "ws://{server}:8080/ws"
+	}
+
+	u := strings.ReplaceAll(tpl, "{server}", serverName)
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return "", fmt.Errorf("parse backend url: %w", err)
+	}
+	if parsed.Scheme != "ws" && parsed.Scheme != "wss" {
+		return "", fmt.Errorf("invalid backend url scheme: %q", parsed.Scheme)
+	}
+
+	return u, nil
 }
 
 // Handler handles WebSocket connections for the gateway.
@@ -261,7 +331,7 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			_, lSpan := Tracer().Start(ctx, "relay_host_to_clients")
-			
+
 			if hub.AuthHook != nil {
 				if err := hub.AuthHook.OnMessage(ctx, authCtx, message); err != nil {
 					log.Printf("Message rejected by auth hook: %v", err)
@@ -278,72 +348,179 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 			lSpan.End()
 		}
 	} else {
-		// Client role (default)
-		host := hub.GetHost(serverName)
-		if host == nil {
-			log.Printf("Client requested unknown host: %s", serverName)
-			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Host not registered"))
+		// Client role (default): first try a registered host; otherwise reverse-proxy to a backend WS server.
+		if host := hub.GetHost(serverName); host != nil {
+			client := &Client{conn: conn, Auth: authCtx}
+			host.AddClient(client)
+			ClientsConnected.Inc()
+			defer func() {
+				host.RemoveClient(client)
+				ClientsConnected.Dec()
+				conn.Close()
+			}()
+
+			// Set pong handler
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			conn.SetPongHandler(func(string) error {
+				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+				return nil
+			})
+
+			// Start pinger
+			go func() {
+				ticker := time.NewTicker(30 * time.Second)
+				defer ticker.Stop()
+				for range ticker.C {
+					if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+						return
+					}
+				}
+			}()
+
+			log.Printf("Client connected to host %s", serverName)
+
+			for {
+				mt, message, err := conn.ReadMessage()
+				if err != nil {
+					log.Printf("Client of %s disconnected: %v", serverName, err)
+					break
+				}
+				_, lSpan := Tracer().Start(ctx, "relay_client_to_host")
+
+				if hub.AuthHook != nil {
+					if err := hub.AuthHook.OnMessage(ctx, authCtx, message); err != nil {
+						log.Printf("Message rejected by auth hook: %v", err)
+						lSpan.End()
+						continue
+					}
+				}
+
+				if hub.Redactor != nil {
+					message = hub.Redactor.Redact(message)
+				}
+				MessagesRelayed.WithLabelValues("client_to_host", serverName).Inc()
+				if err := host.Send(mt, message); err != nil {
+					log.Printf("Error relaying to host %s: %v", serverName, err)
+					RelayErrors.WithLabelValues(serverName).Inc()
+					lSpan.End()
+					break
+				}
+				lSpan.End()
+			}
+			return
+		}
+
+		if !hub.isAllowedServer(serverName) {
+			log.Printf("Client requested unknown server: %s", serverName)
+			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Server not registered"))
 			conn.Close()
 			return
 		}
 
-		client := &Client{conn: conn, Auth: authCtx}
-		host.AddClient(client)
+		backendURL, err := hub.backendURL(serverName)
+		if err != nil {
+			log.Printf("Backend URL error for %s: %v", serverName, err)
+			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Backend URL error"))
+			conn.Close()
+			return
+		}
+
+		dialer := hub.Dialer
+		if dialer == nil {
+			dialer = websocket.DefaultDialer
+		}
+
+		backendConn, _, err := dialer.DialContext(ctx, backendURL, nil)
+		if err != nil {
+			log.Printf("Backend connect failed for %s: %v", serverName, err)
+			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Backend unavailable"))
+			conn.Close()
+			return
+		}
+		defer backendConn.Close()
+
 		ClientsConnected.Inc()
 		defer func() {
-			host.RemoveClient(client)
 			ClientsConnected.Dec()
 			conn.Close()
 		}()
 
-		// Set pong handler
+		// Keep-alives for both ends
 		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		conn.SetPongHandler(func(string) error {
 			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			return nil
 		})
+		backendConn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		backendConn.SetPongHandler(func(string) error {
+			backendConn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			return nil
+		})
 
-		// Start pinger
-		go func() {
+		stop := make(chan struct{})
+		stopOnce := sync.Once{}
+		closeStop := func() { stopOnce.Do(func() { close(stop) }) }
+
+		ping := func(c *websocket.Conn) {
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
-			for range ticker.C {
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			for {
+				select {
+				case <-ticker.C:
+					if err := c.WriteMessage(websocket.PingMessage, nil); err != nil {
+						closeStop()
+						return
+					}
+				case <-stop:
 					return
 				}
 			}
-		}()
-
-		log.Printf("Client connected to host %s", serverName)
-
-		for {
-			mt, message, err := conn.ReadMessage()
-			if err != nil {
-				log.Printf("Client of %s disconnected: %v", serverName, err)
-				break
-			}
-			_, lSpan := Tracer().Start(ctx, "relay_client_to_host")
-			
-			if hub.AuthHook != nil {
-				if err := hub.AuthHook.OnMessage(ctx, authCtx, message); err != nil {
-					log.Printf("Message rejected by auth hook: %v", err)
-					lSpan.End()
-					continue
-				}
-			}
-
-			if hub.Redactor != nil {
-				message = hub.Redactor.Redact(message)
-			}
-			MessagesRelayed.WithLabelValues("client_to_host", serverName).Inc()
-			if err := host.Send(mt, message); err != nil {
-				log.Printf("Error relaying to host %s: %v", serverName, err)
-				RelayErrors.WithLabelValues(serverName).Inc()
-				lSpan.End()
-				break
-			}
-			lSpan.End()
 		}
+		go ping(conn)
+		go ping(backendConn)
+
+		log.Printf("Client proxy connected: %s -> %s", serverName, backendURL)
+
+		relay := func(src, dst *websocket.Conn, direction string) {
+			for {
+				mt, message, err := src.ReadMessage()
+				if err != nil {
+					closeStop()
+					return
+				}
+
+				_, lSpan := Tracer().Start(ctx, "relay_"+direction)
+				if hub.AuthHook != nil {
+					if err := hub.AuthHook.OnMessage(ctx, authCtx, message); err != nil {
+						log.Printf("Message rejected by auth hook: %v", err)
+						lSpan.End()
+						continue
+					}
+				}
+				if hub.Redactor != nil {
+					message = hub.Redactor.Redact(message)
+				}
+
+				if direction == "client_to_backend" {
+					MessagesRelayed.WithLabelValues("client_to_host", serverName).Inc()
+				} else {
+					MessagesRelayed.WithLabelValues("host_to_client", serverName).Inc()
+				}
+
+				if err := dst.WriteMessage(mt, message); err != nil {
+					RelayErrors.WithLabelValues(serverName).Inc()
+					lSpan.End()
+					closeStop()
+					return
+				}
+				lSpan.End()
+			}
+		}
+
+		go relay(conn, backendConn, "client_to_backend")
+		go relay(backendConn, conn, "backend_to_client")
+
+		<-stop
 	}
 }
 
