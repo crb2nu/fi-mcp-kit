@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 )
 
 // Conn represents a pooled connection to an MCP server.

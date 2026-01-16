@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 )
 
 type mockTransport struct {
@@ -38,7 +38,7 @@ func TestPool_Concurrency(t *testing.T) {
 	// Launch parallel requests
 	var wg sync.WaitGroup
 	workers := 10 // Match MaxOpen to avoid errors
-	
+
 	// Server 1
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -61,7 +61,7 @@ func TestPool_Concurrency(t *testing.T) {
 	// Actually, since MaxOpen=10, requests 11-20 should block or fail?
 	// Wait, Pool.Get returns error if max reached?
 	// The implementation says: `if p.activeCount[serverName] >= p.maxOpen { return nil, fmt.Errorf("max connections reached") }`
-	
+
 	// So we expect some failures if we hit the limit hard.
 	// But `Pool` doesn't block/wait for a connection? It returns error immediately.
 	// That's a "fail-fast" pool.

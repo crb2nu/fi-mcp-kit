@@ -2,14 +2,10 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"strings"
 
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/router"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 )
 
 func (p *Proxy) discoverHubTools(ctx context.Context) error {
@@ -30,7 +26,7 @@ func (p *Proxy) discoverHubTools(ctx context.Context) error {
 	// 2. Prepare tools for each remote host
 	for _, name := range hostNames {
 		log.Printf("Auto-bridging remote host: %s", name)
-		
+
 		// Fetch tools from Hub
 		tools, err := client.FetchTools(ctx, name)
 		if err != nil {
