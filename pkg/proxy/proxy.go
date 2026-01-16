@@ -370,11 +370,11 @@ func (b *backend) initialize(ctx context.Context) error {
 		return err
 	}
 
-	if err := b.transport.Send(ctx, initReq); err != nil {
-		return err
+	if sendErr := b.transport.Send(ctx, initReq); sendErr != nil {
+		return sendErr
 	}
-	if _, err := b.recvResponse(ctx, id); err != nil {
-		return err
+	if _, recvErr := b.recvResponse(ctx, id); recvErr != nil {
+		return recvErr
 	}
 
 	initialized, err := mcp.NewRequest(nil, "notifications/initialized", nil)
@@ -393,8 +393,8 @@ func (b *backend) listTools(ctx context.Context) ([]mcp.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := b.transport.Send(ctx, req); err != nil {
-		return nil, err
+	if sendErr := b.transport.Send(ctx, req); sendErr != nil {
+		return nil, sendErr
 	}
 
 	msg, err := b.recvResponse(ctx, id)
@@ -421,8 +421,8 @@ func (b *backend) callTool(ctx context.Context, toolName string, args map[string
 	if err != nil {
 		return nil, err
 	}
-	if err := b.transport.Send(ctx, req); err != nil {
-		return nil, err
+	if sendErr := b.transport.Send(ctx, req); sendErr != nil {
+		return nil, sendErr
 	}
 
 	msg, err := b.recvResponse(ctx, id)

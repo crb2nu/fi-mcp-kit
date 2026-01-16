@@ -298,12 +298,6 @@ func (r *Router) Route(ctx context.Context, serverName string) (*RouteDecision, 
 	localHealth := r.localHealth[serverName]
 	hubHealth := r.hubHealth[serverName]
 
-	// If server is hub-bound and hub is enabled, prefer hub
-	if server.IsHubCapable() && !server.IsLocalOnly() && r.hubEnabled && r.isHealthy(hubHealth) {
-		// We still try local first if it's healthy, unless it's explicitly NOT local-only but hub-preferred.
-		// For now, let's stick to local-first if healthy of Hub-fallback.
-	}
-
 	if r.isHealthy(localHealth) {
 		return &RouteDecision{
 			Target:     TargetLocal,

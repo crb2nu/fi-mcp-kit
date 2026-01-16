@@ -46,12 +46,14 @@ func TestHubTransportBridge(t *testing.T) {
 	// Mock logic for remote host tools
 	go func() {
 		for {
-			_, p, err := hostConn.ReadMessage()
-			if err != nil {
+			_, p, readErr := hostConn.ReadMessage()
+			if readErr != nil {
 				return
 			}
 			var msg mcp.Message
-			json.Unmarshal(p, &msg)
+			if unmarshalErr := json.Unmarshal(p, &msg); unmarshalErr != nil {
+				continue
+			}
 
 			if msg.Method == "initialize" {
 				res := mcp.InitializeResult{
@@ -61,7 +63,9 @@ func TestHubTransportBridge(t *testing.T) {
 				}
 				resp, _ := mcp.NewResponse(msg.ID, res)
 				b, _ := json.Marshal(resp)
-				hostConn.WriteMessage(websocket.TextMessage, b)
+				if writeErr := hostConn.WriteMessage(websocket.TextMessage, b); writeErr != nil {
+					return
+				}
 			} else if msg.Method == "tools/list" {
 				res := mcp.ToolsListResult{
 					Tools: []mcp.Tool{
@@ -70,7 +74,9 @@ func TestHubTransportBridge(t *testing.T) {
 				}
 				resp, _ := mcp.NewResponse(msg.ID, res)
 				b, _ := json.Marshal(resp)
-				hostConn.WriteMessage(websocket.TextMessage, b)
+				if writeErr := hostConn.WriteMessage(websocket.TextMessage, b); writeErr != nil {
+					return
+				}
 			}
 		}
 	}()
@@ -79,7 +85,9 @@ func TestHubTransportBridge(t *testing.T) {
 	tmpDir, _ := os.MkdirTemp("", "proxy-test")
 	defer os.RemoveAll(tmpDir)
 	regFile := filepath.Join(tmpDir, "registry.yaml")
-	os.WriteFile(regFile, []byte("version: 1\nservers: []"), 0644)
+	if writeFileErr := os.WriteFile(regFile, []byte("version: 1\nservers: []"), 0644); writeFileErr != nil {
+		t.Fatalf("write registry file: %v", writeFileErr)
+	}
 
 	p, err := New(Config{
 		RegistryPath: regFile,

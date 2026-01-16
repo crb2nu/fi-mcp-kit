@@ -48,8 +48,8 @@ func TestGatewayMultiplexing(t *testing.T) {
 
 	// 4. Test Client 1 -> Host
 	testMsg := "hello from client 1"
-	if err := client1Conn.WriteMessage(websocket.TextMessage, []byte(testMsg)); err != nil {
-		t.Fatalf("Client 1 failed to send message: %v", err)
+	if writeErr := client1Conn.WriteMessage(websocket.TextMessage, []byte(testMsg)); writeErr != nil {
+		t.Fatalf("Client 1 failed to send message: %v", writeErr)
 	}
 
 	_, p, err := hostConn.ReadMessage()
@@ -62,8 +62,8 @@ func TestGatewayMultiplexing(t *testing.T) {
 
 	// 5. Test Host -> Multiple Clients (Broadcast)
 	broadcastMsg := "ping from host"
-	if err := hostConn.WriteMessage(websocket.TextMessage, []byte(broadcastMsg)); err != nil {
-		t.Fatalf("Host failed to broadcast: %v", err)
+	if writeErr := hostConn.WriteMessage(websocket.TextMessage, []byte(broadcastMsg)); writeErr != nil {
+		t.Fatalf("Host failed to broadcast: %v", writeErr)
 	}
 
 	// Verify Client 1 receives it
@@ -182,8 +182,8 @@ func TestGatewayRedaction(t *testing.T) {
 	// Test message with a secret
 	secretKey := "sk-1234567890abcdef12345678"
 	msgWithSecret := "User requested key: " + secretKey
-	if err := clientConn.WriteMessage(websocket.TextMessage, []byte(msgWithSecret)); err != nil {
-		t.Fatalf("Client failed to send: %v", err)
+	if writeErr := clientConn.WriteMessage(websocket.TextMessage, []byte(msgWithSecret)); writeErr != nil {
+		t.Fatalf("Client failed to send: %v", writeErr)
 	}
 
 	_, p, err := hostConn.ReadMessage()

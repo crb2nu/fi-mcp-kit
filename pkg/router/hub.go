@@ -74,15 +74,15 @@ func (c *HubClient) FetchTools(ctx context.Context, serverName string) ([]mcp.To
 	}
 	defer transport.Close()
 
-	if err := transport.Initialize(ctx); err != nil {
-		return nil, fmt.Errorf("init hub transport for tools: %w", err)
+	if initErr := transport.Initialize(ctx); initErr != nil {
+		return nil, fmt.Errorf("init hub transport for tools: %w", initErr)
 	}
 
 	// tools/list
 	id := int64(1)
 	req, _ := mcp.NewRequest(id, "tools/list", nil)
-	if err := transport.Send(ctx, req); err != nil {
-		return nil, err
+	if sendErr := transport.Send(ctx, req); sendErr != nil {
+		return nil, sendErr
 	}
 
 	resp, err := transport.Recv(ctx)

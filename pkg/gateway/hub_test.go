@@ -57,8 +57,8 @@ func TestHandler_ReverseProxy_WithRegistryAllowlist(t *testing.T) {
 	defer c.Close()
 
 	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
-	if err := c.WriteMessage(websocket.TextMessage, payload); err != nil {
-		t.Fatalf("write: %v", err)
+	if writeErr := c.WriteMessage(websocket.TextMessage, payload); writeErr != nil {
+		t.Fatalf("write: %v", writeErr)
 	}
 
 	_, got, err := c.ReadMessage()

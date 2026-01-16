@@ -301,13 +301,13 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		host := hub.RegisterHost(serverName, conn, authCtx)
 		defer func() {
 			hub.UnregisterHost(serverName)
-			conn.Close()
+			_ = conn.Close()
 		}()
 
 		// Set pong handler to reset read deadline
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		conn.SetPongHandler(func(string) error {
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			return nil
 		})
 
@@ -356,13 +356,13 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				host.RemoveClient(client)
 				ClientsConnected.Dec()
-				conn.Close()
+				_ = conn.Close()
 			}()
 
 			// Set pong handler
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			conn.SetPongHandler(func(string) error {
-				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+				_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 				return nil
 			})
 
@@ -412,16 +412,16 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 		if !hub.isAllowedServer(serverName) {
 			log.Printf("Client requested unknown server: %s", serverName)
-			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Server not registered"))
-			conn.Close()
+			_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Server not registered"))
+			_ = conn.Close()
 			return
 		}
 
 		backendURL, err := hub.backendURL(serverName)
 		if err != nil {
 			log.Printf("Backend URL error for %s: %v", serverName, err)
-			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Backend URL error"))
-			conn.Close()
+			_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Backend URL error"))
+			_ = conn.Close()
 			return
 		}
 
@@ -433,8 +433,8 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		backendConn, _, err := dialer.DialContext(ctx, backendURL, nil)
 		if err != nil {
 			log.Printf("Backend connect failed for %s: %v", serverName, err)
-			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Backend unavailable"))
-			conn.Close()
+			_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Backend unavailable"))
+			_ = conn.Close()
 			return
 		}
 		defer backendConn.Close()
@@ -442,18 +442,18 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		ClientsConnected.Inc()
 		defer func() {
 			ClientsConnected.Dec()
-			conn.Close()
+			_ = conn.Close()
 		}()
 
 		// Keep-alives for both ends
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		conn.SetPongHandler(func(string) error {
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			return nil
 		})
-		backendConn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = backendConn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		backendConn.SetPongHandler(func(string) error {
-			backendConn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			_ = backendConn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			return nil
 		})
 
@@ -535,5 +535,7 @@ func HostsHandler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(hub.ListHosts())
+	if err := json.NewEncoder(w).Encode(hub.ListHosts()); err != nil {
+		http.Error(w, "encode error: "+err.Error(), http.StatusInternalServerError)
+	}
 }
