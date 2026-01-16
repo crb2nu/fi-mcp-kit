@@ -5,22 +5,34 @@ include:
 
 default:
   image: golang:1.25.5
+  variables:
+    GOPRIVATE: "gitlab.flexinfer.ai"
+    GONOSUMDB: "gitlab.flexinfer.ai"
 
 stages: [lint, test, build]
 
 lint:
   extends: .go-lint
   image: golang:1.25.5
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.flexinfer.ai/".insteadOf "https://gitlab.flexinfer.ai/"
+    - go mod download
 
 test:
   extends: .go-test
   image: golang:1.25.5
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.flexinfer.ai/".insteadOf "https://gitlab.flexinfer.ai/"
+    - go mod download
   variables:
     CGO_ENABLED: "1"
 
 build:cli:
   extends: .go-build
   image: golang:1.25.5
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.flexinfer.ai/".insteadOf "https://gitlab.flexinfer.ai/"
+    - go mod download
   script:
     - CGO_ENABLED=0 go build -ldflags="-s -w" -o fi-mcp ./cmd/fi-mcp
   artifacts:
