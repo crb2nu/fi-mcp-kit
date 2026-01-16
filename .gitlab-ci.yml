@@ -5,9 +5,10 @@ include:
 
 default:
   image: golang:1.25.5
-  variables:
-    GOPRIVATE: "gitlab.flexinfer.ai"
-    GONOSUMDB: "gitlab.flexinfer.ai"
+
+variables:
+  GOPRIVATE: "gitlab.flexinfer.ai"
+  GONOSUMDB: "gitlab.flexinfer.ai"
 
 stages: [lint, test, build]
 
