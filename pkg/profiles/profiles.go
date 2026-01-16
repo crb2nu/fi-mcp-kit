@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 	"gopkg.in/yaml.v3"
 )
 

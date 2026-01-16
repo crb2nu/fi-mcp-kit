@@ -3,7 +3,7 @@ package profiles
 import (
 	"testing"
 
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 )
 
 func TestNewManager(t *testing.T) {

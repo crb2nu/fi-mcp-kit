@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 )
 
 // HubClient provides helper methods for interacting with an MCP Hub (Gateway).

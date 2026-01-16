@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/registry"
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 )
 
 // ToolIndex maps tool names to the servers that provide them.

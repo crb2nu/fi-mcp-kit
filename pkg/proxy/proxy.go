@@ -20,7 +20,7 @@ import (
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/registry"
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/router"
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/secrets"
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 )
 
 type Config struct {

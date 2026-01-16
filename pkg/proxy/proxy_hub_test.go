@@ -13,7 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/gateway"
-	"gitlab.flexinfer.ai/libs/mcp-go"
+	mcp "gitlab.flexinfer.ai/libs/mcp-go"
 )
 
 func TestHubTransportBridge(t *testing.T) {
