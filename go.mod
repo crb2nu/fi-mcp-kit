@@ -7,7 +7,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
-	gitlab.flexinfer.ai/libs/mcp-go v0.2.1-0.20260116214823-33a57475bf2c
+	gitlab.flexinfer.ai/libs/mcp-go v0.2.1-0.20260116221656-df35197c2d46
 	go.opentelemetry.io/otel v1.39.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.39.0
 	go.opentelemetry.io/otel/sdk v1.39.0
