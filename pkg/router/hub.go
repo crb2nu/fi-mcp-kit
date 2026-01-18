@@ -54,6 +54,12 @@ func (c *HubClient) DiscoverHosts(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("fetch hub hosts failed (%d): %s", resp.StatusCode, string(body))
 	}
 
+	// Check Content-Type to detect HTML error pages (e.g., Cloudflare Access login)
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "text/html") {
+		return nil, fmt.Errorf("hub returned HTML instead of JSON (likely auth required)")
+	}
+
 	var hostNames []string
 	if err := json.NewDecoder(resp.Body).Decode(&hostNames); err != nil {
 		return nil, fmt.Errorf("decode hub hosts: %w", err)
