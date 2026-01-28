@@ -39,6 +39,9 @@ type Process struct {
 	LastActivity time.Time
 	stdin        io.WriteCloser
 	stdout       io.ReadCloser
+	// SSH-specific fields (nil for local processes)
+	sshClient  interface{ Close() error } // *ssh.Client
+	sshSession interface{ Close() error } // *ssh.Session
 }
 
 // ExpandFunc expands variables in strings (e.g., ${repo} -> /path/to/workspace).
@@ -68,14 +71,20 @@ func (m *Manager) SetExpandFunc(fn ExpandFunc) {
 	m.expandFunc = fn
 }
 
-// Start starts a local MCP server process.
+// Start starts an MCP server process (local or SSH-based).
 func (m *Manager) Start(ctx context.Context, serverName string) (*Process, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Check if already running
 	if proc, ok := m.procs[serverName]; ok {
-		if proc.Cmd.Process != nil {
+		// For local processes, check if the process is still running
+		if proc.Cmd != nil && proc.Cmd.Process != nil {
+			proc.LastActivity = time.Now()
+			return proc, nil
+		}
+		// For SSH processes, check if client is set
+		if proc.sshClient != nil {
 			proc.LastActivity = time.Now()
 			return proc, nil
 		}
@@ -89,6 +98,16 @@ func (m *Manager) Start(ctx context.Context, serverName string) (*Process, error
 
 	if spec.Command == "" {
 		return nil, fmt.Errorf("server %s has no command defined", serverName)
+	}
+
+	// Check for SSH configuration
+	if spec.SSH != nil && spec.SSH.Host != "" {
+		proc, err := m.startSSH(ctx, serverName, spec)
+		if err != nil {
+			return nil, err
+		}
+		m.procs[serverName] = proc
+		return proc, nil
 	}
 
 	// Expand variables in command
@@ -157,11 +176,23 @@ func (m *Manager) Stop(serverName string) error {
 
 	// Close transport
 	proc.Transport.Close()
-	proc.stdin.Close()
-	proc.stdout.Close()
+	if proc.stdin != nil {
+		proc.stdin.Close()
+	}
+	if proc.stdout != nil {
+		proc.stdout.Close()
+	}
 
-	// Kill process
-	if proc.Cmd.Process != nil {
+	// For SSH processes, close session and client
+	if proc.sshSession != nil {
+		proc.sshSession.Close()
+	}
+	if proc.sshClient != nil {
+		proc.sshClient.Close()
+	}
+
+	// For local processes, kill the process
+	if proc.Cmd != nil && proc.Cmd.Process != nil {
 		_ = proc.Cmd.Process.Kill()
 		_ = proc.Cmd.Wait()
 	}

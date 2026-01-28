@@ -130,6 +130,30 @@ type InputSchema struct {
 	Required   []string       `yaml:"required,omitempty"`
 }
 
+// SSHSpec defines SSH connection configuration for remote servers.
+type SSHSpec struct {
+	// Host is the SSH server address (host:port). Port defaults to 22 if omitted.
+	Host string `yaml:"host,omitempty"`
+
+	// User is the SSH username. Defaults to current user if omitted.
+	User string `yaml:"user,omitempty"`
+
+	// KeyFile is the path to the private key file (optional if using agent).
+	KeyFile string `yaml:"key_file,omitempty"`
+
+	// UseAgent enables SSH agent authentication (default: true).
+	UseAgent *bool `yaml:"use_agent,omitempty"`
+
+	// StrictHostKeyChecking enables host key verification (default: true).
+	StrictHostKeyChecking *bool `yaml:"strict_host_key_checking,omitempty"`
+
+	// KnownHostsFile is the path to known_hosts file (optional, uses default if empty).
+	KnownHostsFile string `yaml:"known_hosts_file,omitempty"`
+
+	// ConnectTimeout is the connection timeout in seconds (default: 30).
+	ConnectTimeout int `yaml:"connect_timeout,omitempty"`
+}
+
 // TargetSpec defines a server's configuration for a specific target.
 type TargetSpec struct {
 	Description string            `yaml:"description,omitempty"`
@@ -141,6 +165,7 @@ type TargetSpec struct {
 	AlwaysAllow []string          `yaml:"always_allow,omitempty"`
 	Type        string            `yaml:"type,omitempty"`
 	Tools       []ToolSchema      `yaml:"tools,omitempty"` // Static tool schemas for instant availability
+	SSH         *SSHSpec          `yaml:"ssh,omitempty"`   // SSH configuration for remote servers
 }
 
 // Load reads and parses a registry YAML file.
@@ -261,6 +286,9 @@ func mergeSpec(dst, src *TargetSpec) {
 	}
 	if len(src.Tools) > 0 {
 		dst.Tools = src.Tools
+	}
+	if src.SSH != nil {
+		dst.SSH = src.SSH
 	}
 }
 
