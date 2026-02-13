@@ -13,17 +13,74 @@ import (
 //go:embed schemas/mcp_json.json
 var mcpJSONSchemaBytes []byte
 
-var mcpJSONSchema *jsonschema.Schema
+//go:embed schemas/claude_settings.json
+var claudeSettingsSchemaBytes []byte
+
+//go:embed schemas/gemini_settings.json
+var geminiSettingsSchemaBytes []byte
+
+//go:embed schemas/codex_config.json
+var codexConfigSchemaBytes []byte
+
+var (
+	mcpJSONSchema        *jsonschema.Schema
+	claudeSettingsSchema *jsonschema.Schema
+	geminiSettingsSchema *jsonschema.Schema
+	codexConfigSchema    *jsonschema.Schema
+)
 
 func init() {
+	mcpJSONSchema = mustCompileSchema("mcp_json.json", mcpJSONSchemaBytes)
+	claudeSettingsSchema = mustCompileSchema("claude_settings.json", stripNonRE2Patterns(claudeSettingsSchemaBytes))
+	geminiSettingsSchema = mustCompileSchema("gemini_settings.json", geminiSettingsSchemaBytes)
+	codexConfigSchema = mustCompileSchema("codex_config.json", codexConfigSchemaBytes)
+}
+
+func mustCompileSchema(name string, data []byte) *jsonschema.Schema {
 	compiler := jsonschema.NewCompiler()
-	if err := compiler.AddResource("mcp_json.json", strings.NewReader(string(mcpJSONSchemaBytes))); err != nil {
-		panic(fmt.Sprintf("failed to load embedded JSON schema: %v", err))
+	if err := compiler.AddResource(name, strings.NewReader(string(data))); err != nil {
+		panic(fmt.Sprintf("failed to load embedded schema %s: %v", name, err))
 	}
-	var err error
-	mcpJSONSchema, err = compiler.Compile("mcp_json.json")
+	schema, err := compiler.Compile(name)
 	if err != nil {
-		panic(fmt.Sprintf("failed to compile JSON schema: %v", err))
+		panic(fmt.Sprintf("failed to compile schema %s: %v", name, err))
+	}
+	return schema
+}
+
+// stripNonRE2Patterns removes regex patterns from a JSON schema that use ECMA-262
+// features (lookaheads, lookbehinds) unsupported by Go's RE2 engine. The library
+// validates patterns during compilation using regexp.Compile, so non-RE2 patterns
+// cause panics. Removing them preserves full structural validation while skipping
+// pattern-level string matching.
+func stripNonRE2Patterns(data []byte) []byte {
+	var schema map[string]any
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return data // Fall through to compilation error
+	}
+	stripPatternsRecursive(schema)
+	out, err := json.Marshal(schema)
+	if err != nil {
+		return data
+	}
+	return out
+}
+
+func stripPatternsRecursive(v any) {
+	switch m := v.(type) {
+	case map[string]any:
+		if p, ok := m["pattern"].(string); ok {
+			if strings.Contains(p, "(?") {
+				delete(m, "pattern")
+			}
+		}
+		for _, val := range m {
+			stripPatternsRecursive(val)
+		}
+	case []any:
+		for _, val := range v.([]any) {
+			stripPatternsRecursive(val)
+		}
 	}
 }
 
@@ -178,6 +235,131 @@ func ValidateTOMLStructure(target, filePath string, content []byte) *ValidationR
 
 	result.Valid = !result.HasErrors()
 	return result
+}
+
+// ValidateClaudeSettings validates a Claude Code settings.json against the upstream schema.
+func ValidateClaudeSettings(filePath string, content []byte) *ValidationResult {
+	return validateUpstreamJSON("claude", filePath, content, claudeSettingsSchema)
+}
+
+// ValidateGeminiSettings validates a Gemini CLI settings.json against the upstream schema.
+func ValidateGeminiSettings(filePath string, content []byte) *ValidationResult {
+	return validateUpstreamJSON("gemini", filePath, content, geminiSettingsSchema)
+}
+
+// ValidateCodexConfig validates a Codex config.toml against the upstream schema.
+// The TOML content is converted to JSON for schema validation.
+func ValidateCodexConfig(filePath string, content []byte) *ValidationResult {
+	result := &ValidationResult{
+		Target: "codex",
+		File:   filePath,
+		Valid:  true,
+	}
+
+	// Parse TOML into generic map
+	var data map[string]any
+	if err := toml.Unmarshal(content, &data); err != nil {
+		result.AddError(CodeInvalidSchema, "", fmt.Sprintf("invalid TOML: %v", err))
+		result.Valid = false
+		return result
+	}
+
+	// Validate the TOML-as-JSON against the Codex schema
+	if err := codexConfigSchema.Validate(data); err != nil {
+		if ve, ok := err.(*jsonschema.ValidationError); ok {
+			for _, cause := range flattenValidationErrors(ve) {
+				field := cause.InstanceLocation
+				if field == "" {
+					field = "/"
+				}
+				result.AddWarning(CodeUpstreamSchema, field, cause.Message)
+			}
+		} else {
+			result.AddWarning(CodeUpstreamSchema, "", err.Error())
+		}
+	}
+
+	result.Valid = !result.HasErrors()
+	return result
+}
+
+// validateUpstreamJSON validates JSON content against an upstream schema.
+// Validation failures are reported as warnings (non-blocking) since upstream
+// schemas may evolve faster than our vendored copies.
+func validateUpstreamJSON(target, filePath string, content []byte, schema *jsonschema.Schema) *ValidationResult {
+	result := &ValidationResult{
+		Target: target,
+		File:   filePath,
+		Valid:  true,
+	}
+
+	var data any
+	if err := json.Unmarshal(content, &data); err != nil {
+		result.AddError(CodeInvalidSchema, "", fmt.Sprintf("invalid JSON: %v", err))
+		result.Valid = false
+		return result
+	}
+
+	if err := schema.Validate(data); err != nil {
+		if ve, ok := err.(*jsonschema.ValidationError); ok {
+			for _, cause := range flattenValidationErrors(ve) {
+				field := cause.InstanceLocation
+				if field == "" {
+					field = "/"
+				}
+				result.AddWarning(CodeUpstreamSchema, field, cause.Message)
+			}
+		} else {
+			result.AddWarning(CodeUpstreamSchema, "", err.Error())
+		}
+	}
+
+	result.Valid = !result.HasErrors()
+	return result
+}
+
+// UpstreamSchemaInfo describes a vendored upstream schema.
+type UpstreamSchemaInfo struct {
+	Platform string // e.g., "claude", "gemini", "codex"
+	Name     string // File name in schemas/ directory
+	URL      string // Canonical upstream URL for fetching updates
+}
+
+// UpstreamSchemas returns metadata for all vendored upstream schemas.
+func UpstreamSchemas() []UpstreamSchemaInfo {
+	return []UpstreamSchemaInfo{
+		{
+			Platform: "claude",
+			Name:     "claude_settings.json",
+			URL:      "https://json.schemastore.org/claude-code-settings.json",
+		},
+		{
+			Platform: "gemini",
+			Name:     "gemini_settings.json",
+			URL:      "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/schemas/settings.schema.json",
+		},
+		{
+			Platform: "codex",
+			Name:     "codex_config.json",
+			URL:      "https://developers.openai.com/codex/config-schema.json",
+		},
+	}
+}
+
+// GetEmbeddedSchema returns the raw bytes of a vendored schema by filename.
+func GetEmbeddedSchema(name string) ([]byte, bool) {
+	switch name {
+	case "claude_settings.json":
+		return claudeSettingsSchemaBytes, true
+	case "gemini_settings.json":
+		return geminiSettingsSchemaBytes, true
+	case "codex_config.json":
+		return codexConfigSchemaBytes, true
+	case "mcp_json.json":
+		return mcpJSONSchemaBytes, true
+	default:
+		return nil, false
+	}
 }
 
 // IsJSONTarget returns true if the target uses JSON format.

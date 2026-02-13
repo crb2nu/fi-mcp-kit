@@ -862,3 +862,247 @@ PYTHONPATH = "/app"
 		t.Errorf("unexpected errors: %v", result.Errors)
 	}
 }
+
+// --- Upstream Schema Validation Tests ---
+
+func TestValidateClaudeSettings_Valid(t *testing.T) {
+	content := []byte(`{
+		"permissions": {
+			"allow": ["Bash(git *)"],
+			"deny": ["Bash(rm -rf /*)"]
+		},
+		"hooks": {
+			"SessionStart": [
+				{
+					"hooks": [
+						{"type": "command", "command": "echo hello"}
+					]
+				}
+			],
+			"PostToolUse": [
+				{
+					"matcher": "Bash",
+					"hooks": [
+						{"type": "command", "command": "echo done"}
+					]
+				}
+			]
+		}
+	}`)
+
+	result := ValidateClaudeSettings("settings.json", content)
+	if result.HasErrors() {
+		t.Errorf("expected valid settings, got errors: %v", result.Errors)
+	}
+	// Should not produce upstream schema warnings for valid settings
+	for _, e := range result.Errors {
+		if e.Code == CodeUpstreamSchema {
+			t.Errorf("unexpected upstream schema warning: %s", e.Message)
+		}
+	}
+}
+
+func TestValidateClaudeSettings_InvalidHookType(t *testing.T) {
+	content := []byte(`{
+		"hooks": {
+			"PostToolUse": [
+				{
+					"hooks": [
+						{"type": "invalid_type", "command": "echo hello"}
+					]
+				}
+			]
+		}
+	}`)
+
+	result := ValidateClaudeSettings("settings.json", content)
+	// Should produce upstream schema warnings for invalid hook type
+	hasUpstreamWarning := false
+	for _, e := range result.Errors {
+		if e.Code == CodeUpstreamSchema {
+			hasUpstreamWarning = true
+		}
+	}
+	if !hasUpstreamWarning {
+		t.Error("expected upstream schema warning for invalid hook type")
+	}
+}
+
+func TestValidateClaudeSettings_InvalidJSON(t *testing.T) {
+	content := []byte(`{not valid json}`)
+
+	result := ValidateClaudeSettings("settings.json", content)
+	if !result.HasErrors() {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestValidateGeminiSettings_Valid(t *testing.T) {
+	content := []byte(`{
+		"hooks": {
+			"SessionStart": [
+				{
+					"hooks": [
+						{"type": "command", "command": "echo hello"}
+					]
+				}
+			]
+		}
+	}`)
+
+	result := ValidateGeminiSettings("settings.json", content)
+	if result.HasErrors() {
+		t.Errorf("expected valid settings, got errors: %v", result.Errors)
+	}
+}
+
+func TestValidateCodexConfig_Valid(t *testing.T) {
+	content := []byte(`
+notify = ["loom", "agent", "heartbeat"]
+
+[mcp_servers.loom]
+command = "loom"
+args = ["proxy"]
+always_allow = ["*"]
+`)
+
+	result := ValidateCodexConfig("config.toml", content)
+	if result.HasErrors() {
+		t.Errorf("expected valid config, got errors: %v", result.Errors)
+	}
+}
+
+func TestValidateCodexConfig_InvalidTOML(t *testing.T) {
+	content := []byte(`[invalid toml`)
+
+	result := ValidateCodexConfig("config.toml", content)
+	if !result.HasErrors() {
+		t.Error("expected error for invalid TOML")
+	}
+}
+
+func TestUpstreamSchemas_ReturnsAll(t *testing.T) {
+	schemas := UpstreamSchemas()
+	if len(schemas) != 3 {
+		t.Errorf("expected 3 upstream schemas, got %d", len(schemas))
+	}
+
+	platforms := map[string]bool{}
+	for _, s := range schemas {
+		platforms[s.Platform] = true
+		if s.URL == "" {
+			t.Errorf("schema %s has empty URL", s.Name)
+		}
+	}
+	for _, p := range []string{"claude", "gemini", "codex"} {
+		if !platforms[p] {
+			t.Errorf("missing upstream schema for platform %s", p)
+		}
+	}
+}
+
+func TestGetEmbeddedSchema(t *testing.T) {
+	tests := []struct {
+		name  string
+		found bool
+	}{
+		{"claude_settings.json", true},
+		{"gemini_settings.json", true},
+		{"codex_config.json", true},
+		{"mcp_json.json", true},
+		{"nonexistent.json", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, found := GetEmbeddedSchema(tt.name)
+			if found != tt.found {
+				t.Errorf("GetEmbeddedSchema(%q) found=%v, want %v", tt.name, found, tt.found)
+			}
+			if found && len(data) == 0 {
+				t.Errorf("GetEmbeddedSchema(%q) returned empty data", tt.name)
+			}
+		})
+	}
+}
+
+func TestValidateClaudeSettings_GeneratedOutput(t *testing.T) {
+	// Simulates the exact output structure of claudeHooksConfig() from loom-core
+	content := []byte(`{
+		"permissions": {
+			"allow": [
+				"mcp__loom",
+				"Bash(go *)",
+				"Bash(make *)",
+				"Bash(git *)",
+				"Read",
+				"Edit",
+				"Write",
+				"WebFetch",
+				"WebSearch"
+			],
+			"deny": [
+				"Bash(kubectl edit *)",
+				"Bash(kubectl set env *)"
+			]
+		},
+		"hooks": {
+			"SessionStart": [
+				{
+					"hooks": [
+						{
+							"type": "command",
+							"command": "loom agent session-start --namespace test --agent-id claude-code"
+						}
+					]
+				}
+			],
+			"Stop": [
+				{
+					"hooks": [
+						{
+							"type": "command",
+							"command": "loom agent session-end --agent-id claude-code --summarize"
+						}
+					]
+				}
+			],
+			"PreToolUse": [
+				{
+					"matcher": "Bash",
+					"hooks": [
+						{
+							"type": "command",
+							"command": "INPUT=$(cat); exit 0"
+						}
+					]
+				}
+			],
+			"PostToolUse": [
+				{
+					"matcher": "Bash|Task",
+					"hooks": [
+						{
+							"type": "command",
+							"command": "loom agent heartbeat --agent-id claude-code"
+						}
+					]
+				},
+				{
+					"matcher": "Write|Edit",
+					"hooks": [
+						{
+							"type": "command",
+							"command": "echo format"
+						}
+					]
+				}
+			]
+		}
+	}`)
+
+	result := ValidateClaudeSettings("settings.json", content)
+	if result.HasErrors() {
+		t.Errorf("generated Claude settings should be valid, got errors: %v", result.Errors)
+	}
+}

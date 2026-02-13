@@ -43,6 +43,9 @@ const (
 	CodeInvalidTimeout       = "INVALID_TIMEOUT"
 	CodeUnresolvedToken      = "UNRESOLVED_TOKEN"
 
+	// Upstream schema errors
+	CodeUpstreamSchema = "UPSTREAM_SCHEMA"
+
 	// Security errors
 	CodePlaintextSecret = "PLAINTEXT_SECRET"
 )
