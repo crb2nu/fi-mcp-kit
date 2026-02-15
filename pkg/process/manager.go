@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/registry"
@@ -162,7 +163,9 @@ func (m *Manager) Start(ctx context.Context, serverName string) (*Process, error
 	return proc, nil
 }
 
-// Stop stops a running MCP server process.
+// Stop stops a running MCP server process using a graceful shutdown sequence.
+// The sequence follows the MCP spec recommendation: close stdin (EOF signal),
+// wait for voluntary exit, then SIGTERM, then SIGKILL as last resort.
 func (m *Manager) Stop(serverName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -174,7 +177,7 @@ func (m *Manager) Stop(serverName string) error {
 
 	delete(m.procs, serverName)
 
-	// Close transport
+	// Close transport and pipes first (MCP spec: close input stream).
 	proc.Transport.Close()
 	if proc.stdin != nil {
 		proc.stdin.Close()
@@ -183,7 +186,7 @@ func (m *Manager) Stop(serverName string) error {
 		proc.stdout.Close()
 	}
 
-	// For SSH processes, close session and client
+	// For SSH processes, close session and client.
 	if proc.sshSession != nil {
 		proc.sshSession.Close()
 	}
@@ -191,10 +194,25 @@ func (m *Manager) Stop(serverName string) error {
 		proc.sshClient.Close()
 	}
 
-	// For local processes, kill the process
+	// For local processes, graceful shutdown: stdin EOF → wait → SIGTERM → SIGKILL.
 	if proc.Cmd != nil && proc.Cmd.Process != nil {
-		_ = proc.Cmd.Process.Kill()
-		_ = proc.Cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- proc.Cmd.Wait() }()
+
+		select {
+		case <-done:
+			// Exited cleanly after stdin close.
+		case <-time.After(2 * time.Second):
+			// SIGTERM for graceful shutdown.
+			_ = proc.Cmd.Process.Signal(syscall.SIGTERM)
+			select {
+			case <-done:
+			case <-time.After(1 * time.Second):
+				// SIGKILL as last resort.
+				_ = proc.Cmd.Process.Kill()
+				<-done
+			}
+		}
 	}
 
 	return nil
