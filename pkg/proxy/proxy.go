@@ -363,8 +363,14 @@ func (b *backend) initialize(ctx context.Context) error {
 
 	initReq, err := mcp.NewRequest(id, "initialize", mcp.InitializeParams{
 		ProtocolVersion: mcp.ProtocolVersion,
-		Capabilities:    mcp.Capabilities{},
-		ClientInfo:      mcp.ClientInfo{Name: "fi-mcp-proxy", Version: "0.0.0-dev"},
+		Capabilities: mcp.Capabilities{
+			Sampling: &mcp.SamplingCapability{},
+			Resources: &mcp.ResourcesCapability{
+				Subscribe:   true,
+				ListChanged: true,
+			},
+		},
+		ClientInfo: mcp.ClientInfo{Name: "fi-mcp-proxy", Version: "0.0.0-dev"},
 	})
 	if err != nil {
 		return err
