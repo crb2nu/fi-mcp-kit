@@ -111,6 +111,7 @@ type EnvVar struct {
 // Server defines an MCP server in the registry.
 type Server struct {
 	Name       string                 `yaml:"name"`
+	URL        string                 `yaml:"url,omitempty"`
 	Categories []string               `yaml:"categories,omitempty"`
 	Common     *TargetSpec            `yaml:"common,omitempty"`
 	Targets    map[string]*TargetSpec `yaml:"targets,omitempty"`
@@ -224,15 +225,19 @@ func FindRegistryOrDefault(defaultPath string) string {
 	return defaultPath
 }
 
-// GetServerSpec returns the effective spec for a server and target, merging common with target-specific config.
-func (r *Registry) GetServerSpec(serverName, target string) (*TargetSpec, error) {
-	var server *Server
+// GetServer returns the Server entry for the given name, or nil if not found.
+func (r *Registry) GetServer(name string) *Server {
 	for _, s := range r.Servers {
-		if s.Name == serverName {
-			server = s
-			break
+		if s != nil && s.Name == name {
+			return s
 		}
 	}
+	return nil
+}
+
+// GetServerSpec returns the effective spec for a server and target, merging common with target-specific config.
+func (r *Registry) GetServerSpec(serverName, target string) (*TargetSpec, error) {
+	server := r.GetServer(serverName)
 	if server == nil {
 		return nil, fmt.Errorf("server %q not found", serverName)
 	}
