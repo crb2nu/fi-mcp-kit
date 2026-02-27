@@ -36,6 +36,10 @@ func (p *Proxy) discoverHubTools(ctx context.Context) error {
 
 		for _, tool := range tools {
 			namespaced := name + "__" + tool.Name
+			if hasTool(p.server, namespaced) {
+				log.Printf("Skipping duplicate tool registration for %s", namespaced)
+				continue
+			}
 			proxyTool := mcp.Tool{
 				Name:        namespaced,
 				Description: tool.Description,
@@ -60,4 +64,13 @@ func (p *Proxy) discoverHubTools(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func hasTool(server *mcp.Server, toolName string) bool {
+	for _, tool := range server.Tools() {
+		if tool.Name == toolName {
+			return true
+		}
+	}
+	return false
 }
