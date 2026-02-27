@@ -173,6 +173,19 @@ func (p *Pool) Put(conn *Conn) {
 	p.stats.IdleConns++
 }
 
+// ClearServer closes and removes all idle connections for a specific server.
+func (p *Pool) ClearServer(serverName string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	conns := p.conns[serverName]
+	for _, conn := range conns {
+		conn.Transport.Close()
+		p.stats.IdleConns--
+	}
+	delete(p.conns, serverName)
+}
+
 // Close closes the pool and all connections.
 func (p *Pool) Close() error {
 	p.mu.Lock()

@@ -67,6 +67,13 @@ func NewManager(reg *registry.Registry, target string) *Manager {
 	}
 }
 
+// SetRegistry atomically swaps the registry used for server specs.
+func (m *Manager) SetRegistry(reg *registry.Registry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.registry = reg
+}
+
 // SetExpandFunc sets the function used to expand variables in commands.
 func (m *Manager) SetExpandFunc(fn ExpandFunc) {
 	m.expandFunc = fn

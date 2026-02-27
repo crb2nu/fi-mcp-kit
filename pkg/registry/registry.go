@@ -79,12 +79,30 @@ func GetRepoRoot(registryPath string) string {
 	return filepath.Join(home, "workspace")
 }
 
+// PlatformPermission defines platform-specific permission and policy settings.
+type PlatformPermission struct {
+	Settings              map[string]any `yaml:"settings,omitempty"`
+	Allow                 []string       `yaml:"allow,omitempty"`
+	Deny                  []string       `yaml:"deny,omitempty"`
+	AdditionalDirectories []string       `yaml:"additional_directories,omitempty"`
+}
+
+// SandboxPolicy defines sandboxing requirements for tool execution.
+type SandboxPolicy struct {
+	RequireSandbox   []string `yaml:"require_sandbox,omitempty" json:"require_sandbox,omitempty"`
+	RecommendSandbox []string `yaml:"recommend_sandbox,omitempty" json:"recommend_sandbox,omitempty"`
+	AutoProvision    bool     `yaml:"auto_provision,omitempty" json:"auto_provision,omitempty"`
+	DefaultBackend   string   `yaml:"default_backend,omitempty" json:"default_backend,omitempty"`
+}
+
 // Registry holds the parsed registry configuration.
 type Registry struct {
-	Version    int               `yaml:"version"`
-	EnvAliases map[string]EnvVar `yaml:"env_aliases,omitempty"`
-	Servers    []*Server         `yaml:"servers"`
-	Routing    []*RoutingRule    `yaml:"routing,omitempty"`
+	Version             int                            `yaml:"version"`
+	EnvAliases          map[string]EnvVar              `yaml:"env_aliases,omitempty"`
+	Servers             []*Server                      `yaml:"servers"`
+	Routing             []*RoutingRule                 `yaml:"routing,omitempty"`
+	PlatformPermissions map[string]*PlatformPermission `yaml:"platform_permissions,omitempty"`
+	SandboxPolicy       *SandboxPolicy                 `yaml:"sandbox_policy,omitempty"`
 }
 
 // RoutingRule defines how to route a tool call based on its arguments.

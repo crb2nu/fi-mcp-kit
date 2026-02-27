@@ -14,8 +14,10 @@ import (
 
 // HubClient provides helper methods for interacting with an MCP Hub (Gateway).
 type HubClient struct {
-	url   string
-	token string
+	url            string
+	token          string
+	cfClientID     string
+	cfClientSecret string
 }
 
 func NewHubClient(url, token string) *HubClient {
@@ -23,6 +25,16 @@ func NewHubClient(url, token string) *HubClient {
 		url:   url,
 		token: token,
 	}
+}
+
+// NewHubClientWithCFAccess creates a HubClient with Cloudflare Access headers.
+// The cfClientID and cfClientSecret are sent as CF-Access-Client-Id and
+// CF-Access-Client-Secret headers on every request.
+func NewHubClientWithCFAccess(url, token, cfClientID, cfClientSecret string) *HubClient {
+	c := NewHubClient(url, token)
+	c.cfClientID = cfClientID
+	c.cfClientSecret = cfClientSecret
+	return c
 }
 
 // DiscoverHosts fetches the list of available servers from the Hub.
@@ -40,6 +52,10 @@ func (c *HubClient) DiscoverHosts(ctx context.Context) ([]string, error) {
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if c.cfClientID != "" {
+		req.Header.Set("CF-Access-Client-Id", c.cfClientID)
+		req.Header.Set("CF-Access-Client-Secret", c.cfClientSecret)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}

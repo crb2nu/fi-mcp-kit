@@ -108,6 +108,23 @@ func New(cfg Config) *Router {
 	return r
 }
 
+// SetRegistry atomically swaps the registry and rebuilds the tool index.
+func (r *Router) SetRegistry(reg *registry.Registry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registry = reg
+	r.toolIndex = make(ToolIndex)
+	if reg != nil {
+		for _, s := range reg.Servers {
+			for _, t := range s.Targets {
+				for _, tool := range t.Tools {
+					r.toolIndex[tool.Name] = append(r.toolIndex[tool.Name], s.Name)
+				}
+			}
+		}
+	}
+}
+
 func (r *Router) HubEnabled() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
