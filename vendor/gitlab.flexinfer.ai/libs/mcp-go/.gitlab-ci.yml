@@ -1,0 +1,25 @@
+# Go CI - Uses shared templates from platform/gitops
+include:
+  - project: 'platform/gitops'
+    file: '/ci/templates/go.yml'
+
+stages: [lint, test, build]
+
+default:
+  image: golang:1.24
+
+lint:
+  extends: .go-lint
+  image: golang:1.24
+
+test:
+  extends: .go-test
+  image: golang:1.24
+  variables:
+    CGO_ENABLED: "1"
+
+build:
+  extends: .go-build
+  image: golang:1.24
+  script:
+    - go build ./...

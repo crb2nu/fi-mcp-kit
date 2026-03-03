@@ -19,23 +19,31 @@ lint:
   extends: .go-lint
   image: golang:1.25.5
   before_script:
-    - go mod download
+    - mkdir -p "$GOPATH" "$GOCACHE"
+  script:
+    - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0
+    - GOFLAGS=-mod=vendor $(go env GOPATH)/bin/golangci-lint run --timeout 5m ./...
 
 test:
   extends: .go-test
   image: golang:1.25.5
   before_script:
-    - go mod download
+    - mkdir -p "$GOPATH" "$GOCACHE"
   variables:
     CGO_ENABLED: "1"
+  script:
+    - GOFLAGS=-mod=vendor go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+    - go install github.com/boumenot/gocover-cobertura@v1.4.0
+    - $(go env GOPATH)/bin/gocover-cobertura < coverage.out > coverage.xml
+    - GOFLAGS=-mod=vendor go tool cover -func=coverage.out
 
 build:cli:
   extends: .go-build
   image: golang:1.25.5
   before_script:
-    - go mod download
+    - mkdir -p "$GOPATH" "$GOCACHE"
   script:
-    - CGO_ENABLED=0 go build -ldflags="-s -w" -o fi-mcp ./cmd/fi-mcp
+    - CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -ldflags="-s -w" -o fi-mcp ./cmd/fi-mcp
   artifacts:
     paths:
       - fi-mcp
