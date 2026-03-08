@@ -351,6 +351,10 @@ func (r *Router) isHealthy(h *Health) bool {
 		if time.Since(h.LastError) < r.recoveryTime {
 			return false
 		}
+		// Recovery window elapsed: allow a probe attempt so the server
+		// can recover via RecordSuccess. Without this, local-only servers
+		// remain permanently unavailable after consecutive failures.
+		return true
 	}
 
 	return h.Healthy

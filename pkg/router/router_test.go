@@ -1,7 +1,10 @@
 package router
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"gitlab.flexinfer.ai/libs/fi-mcp-kit/pkg/registry"
 )
@@ -55,11 +58,11 @@ func TestRouter_ResolveServer(t *testing.T) {
 	r := New(Config{Registry: reg})
 
 	tests := []struct {
-		name     string
-		tool     string
-		args     map[string]any
-		want     string
-		wantErr  bool
+		name    string
+		tool    string
+		args    map[string]any
+		want    string
+		wantErr bool
 	}{
 		{
 			name: "Unique tool (smart routing)",
@@ -90,12 +93,12 @@ func TestRouter_ResolveServer(t *testing.T) {
 			want: "fs-hdd",
 		},
 		{
-			name:    "Ambiguous tool without routing rule",
-			tool:    "read_file",
-			args:    nil, // Missing args for routing rule match (assuming arg check is strict)
+			name: "Ambiguous tool without routing rule",
+			tool: "read_file",
+			args: nil, // Missing args for routing rule match (assuming arg check is strict)
 			// Wait, if args missing, routing rule won't match cases. It hits default.
 			// If no default was set, it would fall through to tool index check which would fail ambiguity.
-			want:    "fs-hdd", 
+			want: "fs-hdd",
 		},
 		{
 			name:    "Unknown tool",
@@ -135,5 +138,59 @@ func TestRouter_Ambiguity(t *testing.T) {
 	_, err := r.ResolveServer("common", "ping", nil)
 	if err == nil {
 		t.Fatal("expected ambiguity error, got nil")
+	}
+}
+
+func TestRouter_LocalOnlyRecoveryAfterFailures(t *testing.T) {
+	reg := &registry.Registry{
+		Servers: []*registry.Server{
+			{
+				Name:       "devbox",
+				Categories: []string{"local-only"},
+				Common:     &registry.TargetSpec{},
+			},
+		},
+	}
+
+	r := New(Config{
+		Registry:         reg,
+		FailureThreshold: 3,
+		RecoveryTime:     50 * time.Millisecond, // short for testing
+	})
+
+	// Verify initial health: server starts healthy.
+	decision, err := r.Route(context.Background(), "devbox")
+	if err != nil {
+		t.Fatalf("initial route: %v", err)
+	}
+	if decision.Target != TargetLocal {
+		t.Fatalf("expected TargetLocal initially, got %v", decision.Target)
+	}
+
+	// Record 3 consecutive failures → marks unhealthy.
+	for i := 0; i < 3; i++ {
+		r.RecordFailure("devbox", TargetLocal, errors.New("timeout"))
+	}
+
+	// Within recovery window: should be unavailable.
+	decision, _ = r.Route(context.Background(), "devbox")
+	if decision.Target != TargetUnavailable {
+		t.Fatalf("expected TargetUnavailable during recovery window, got %v", decision.Target)
+	}
+
+	// Wait for recovery window to elapse.
+	time.Sleep(60 * time.Millisecond)
+
+	// After recovery window: should allow probe attempt.
+	decision, _ = r.Route(context.Background(), "devbox")
+	if decision.Target != TargetLocal {
+		t.Fatalf("expected TargetLocal after recovery window, got %v (reason: %s)", decision.Target, decision.Reason)
+	}
+
+	// Simulate successful probe → fully recovers.
+	r.RecordSuccess("devbox", TargetLocal, 10)
+	decision, _ = r.Route(context.Background(), "devbox")
+	if decision.Target != TargetLocal {
+		t.Fatalf("expected TargetLocal after recovery success, got %v", decision.Target)
 	}
 }
