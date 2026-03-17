@@ -3,6 +3,8 @@ include:
   - project: 'platform/gitops'
     file: '/ci/templates/go.yml'
 
+  - project: 'services/tech-radar'
+    file: '/ci/radar.yml'
 default:
   image: golang:1.25.5
 
@@ -77,3 +79,6 @@ build:image:fi-mcp-gateway:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
   allow_failure: true
+
+radar-scan:
+  extends: .radar-scan
