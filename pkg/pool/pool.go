@@ -33,8 +33,10 @@ type Pool struct {
 	maxIdle     int
 	maxOpen     int
 	idleTimeout time.Duration
+	waitTimeout time.Duration
 	dialFunc    DialFunc
 	mu          sync.Mutex
+	cond        *sync.Cond
 	conns       map[string][]*Conn
 	activeCount map[string]int
 	stats       Stats
@@ -49,6 +51,7 @@ type Config struct {
 	MaxIdle     int           // Maximum idle connections per server (default: 2)
 	MaxOpen     int           // Maximum open connections per server (default: 10)
 	IdleTimeout time.Duration // Idle connection timeout (default: 5m)
+	WaitTimeout time.Duration // Wait timeout when pool exhausted; 0 = immediate error (default: 0)
 	DialFunc    DialFunc      // Function to dial new connections
 }
 
@@ -68,10 +71,12 @@ func New(cfg Config) *Pool {
 		maxIdle:     cfg.MaxIdle,
 		maxOpen:     cfg.MaxOpen,
 		idleTimeout: cfg.IdleTimeout,
+		waitTimeout: cfg.WaitTimeout,
 		dialFunc:    cfg.DialFunc,
 		conns:       make(map[string][]*Conn),
 		activeCount: make(map[string]int),
 	}
+	p.cond = sync.NewCond(&p.mu)
 
 	// Start idle connection reaper.
 	go p.reapLoop()
@@ -96,7 +101,7 @@ func (p *Pool) Get(ctx context.Context, serverName string) (*Conn, error) {
 
 			// Drop unhealthy connections and continue looking.
 			if !conn.Healthy {
-				conn.Transport.Close()
+				_ = conn.Transport.Close()
 				continue
 			}
 
@@ -116,8 +121,42 @@ func (p *Pool) Get(ctx context.Context, serverName string) (*Conn, error) {
 
 	// Check if we can create a new connection.
 	if p.activeCount[serverName] >= p.maxOpen {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("max connections reached for %s", serverName)
+		if p.waitTimeout <= 0 {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("max connections reached for %s", serverName)
+		}
+		// Wait for a connection to be returned.
+		deadline := time.Now().Add(p.waitTimeout)
+		for p.activeCount[serverName] >= p.maxOpen {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				p.mu.Unlock()
+				return nil, fmt.Errorf("max connections reached for %s (waited %s)", serverName, p.waitTimeout)
+			}
+			// Wake cond after remaining time so we don't block forever.
+			timer := time.AfterFunc(remaining, func() { p.cond.Broadcast() })
+			p.cond.Wait() // releases mu, re-acquires on wake
+			timer.Stop()
+			if p.closed {
+				p.mu.Unlock()
+				return nil, fmt.Errorf("pool is closed")
+			}
+			// Re-check idle pool — another waiter may have returned a conn.
+			if conns := p.conns[serverName]; len(conns) > 0 {
+				conn := conns[len(conns)-1]
+				p.conns[serverName] = conns[:len(conns)-1]
+				p.stats.IdleConns--
+				if conn.Healthy {
+					p.activeCount[serverName]++
+					p.stats.Hits++
+					p.stats.ActiveConns++
+					p.mu.Unlock()
+					conn.LastUsed = time.Now()
+					return conn, nil
+				}
+				_ = conn.Transport.Close()
+			}
+		}
 	}
 
 	p.activeCount[serverName]++
@@ -149,12 +188,13 @@ func (p *Pool) Get(ctx context.Context, serverName string) (*Conn, error) {
 // Put returns a connection to the pool.
 func (p *Pool) Put(conn *Conn) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	if p.closed || !conn.Healthy {
 		p.activeCount[conn.ServerName]--
 		p.stats.ActiveConns--
-		conn.Transport.Close()
+		_ = conn.Transport.Close()
+		p.cond.Broadcast()
+		p.mu.Unlock()
 		return
 	}
 
@@ -162,7 +202,9 @@ func (p *Pool) Put(conn *Conn) {
 	if len(p.conns[conn.ServerName]) >= p.maxIdle {
 		p.activeCount[conn.ServerName]--
 		p.stats.ActiveConns--
-		conn.Transport.Close()
+		_ = conn.Transport.Close()
+		p.cond.Broadcast()
+		p.mu.Unlock()
 		return
 	}
 
@@ -171,6 +213,8 @@ func (p *Pool) Put(conn *Conn) {
 	p.activeCount[conn.ServerName]--
 	p.stats.ActiveConns--
 	p.stats.IdleConns++
+	p.cond.Broadcast()
+	p.mu.Unlock()
 }
 
 // ClearServer closes and removes all idle connections for a specific server.
@@ -180,7 +224,7 @@ func (p *Pool) ClearServer(serverName string) {
 
 	conns := p.conns[serverName]
 	for _, conn := range conns {
-		conn.Transport.Close()
+		_ = conn.Transport.Close()
 		p.stats.IdleConns--
 	}
 	delete(p.conns, serverName)
@@ -198,7 +242,7 @@ func (p *Pool) Close() error {
 
 	for _, conns := range p.conns {
 		for _, conn := range conns {
-			conn.Transport.Close()
+			_ = conn.Transport.Close()
 		}
 	}
 	p.conns = nil
@@ -237,7 +281,7 @@ func (p *Pool) reapLoop() {
 			var keep []*Conn
 			for _, conn := range conns {
 				if now.Sub(conn.LastUsed) > p.idleTimeout {
-					conn.Transport.Close()
+					_ = conn.Transport.Close()
 					p.stats.IdleConns--
 				} else {
 					keep = append(keep, conn)

@@ -33,7 +33,7 @@ func TestPool_Concurrency(t *testing.T) {
 			return &mockTransport{}, nil
 		},
 	})
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 
 	// Launch parallel requests
 	var wg sync.WaitGroup
@@ -75,7 +75,7 @@ func TestPool_MaxOpenEnforcement(t *testing.T) {
 			return &mockTransport{}, nil
 		},
 	})
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 
 	// Get 1
 	c1, err := p.Get(context.Background(), "s1")
@@ -106,4 +106,127 @@ func TestPool_MaxOpenEnforcement(t *testing.T) {
 
 	p.Put(c2)
 	p.Put(c3)
+}
+
+func TestPool_WaitTimeout_WaitsAndSucceeds(t *testing.T) {
+	p := New(Config{
+		MaxIdle:     1,
+		MaxOpen:     1,
+		WaitTimeout: 2 * time.Second,
+		DialFunc: func(ctx context.Context, serverName string) (mcp.Transport, error) {
+			return &mockTransport{}, nil
+		},
+	})
+	defer func() { _ = p.Close() }()
+
+	c1, err := p.Get(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		c, err := p.Get(context.Background(), "s1")
+		if err != nil {
+			done <- err
+			return
+		}
+		p.Put(c)
+		done <- nil
+	}()
+
+	// Return after short delay — waiter should unblock.
+	time.Sleep(100 * time.Millisecond)
+	p.Put(c1)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("waiter got error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("waiter timed out")
+	}
+}
+
+func TestPool_WaitTimeout_Expires(t *testing.T) {
+	p := New(Config{
+		MaxIdle:     1,
+		MaxOpen:     1,
+		WaitTimeout: 200 * time.Millisecond,
+		DialFunc: func(ctx context.Context, serverName string) (mcp.Transport, error) {
+			return &mockTransport{}, nil
+		},
+	})
+	defer func() { _ = p.Close() }()
+
+	c1, err := p.Get(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, err = p.Get(context.Background(), "s1")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed < 150*time.Millisecond {
+		t.Errorf("returned too quickly: %v", elapsed)
+	}
+
+	p.Put(c1)
+}
+
+func TestPool_WaitTimeout_ConcurrentWaiters(t *testing.T) {
+	p := New(Config{
+		MaxIdle:     2,
+		MaxOpen:     2,
+		WaitTimeout: 2 * time.Second,
+		DialFunc: func(ctx context.Context, serverName string) (mcp.Transport, error) {
+			return &mockTransport{}, nil
+		},
+	})
+	defer func() { _ = p.Close() }()
+
+	c1, _ := p.Get(context.Background(), "s1")
+	c2, _ := p.Get(context.Background(), "s1")
+
+	const waiters = 4
+	results := make(chan error, waiters)
+
+	for i := 0; i < waiters; i++ {
+		go func() {
+			conn, err := p.Get(context.Background(), "s1")
+			if err != nil {
+				results <- err
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+			p.Put(conn)
+			results <- nil
+		}()
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	p.Put(c1)
+	time.Sleep(50 * time.Millisecond)
+	p.Put(c2)
+
+	var successes int
+	for i := 0; i < waiters; i++ {
+		select {
+		case err := <-results:
+			if err == nil {
+				successes++
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out")
+		}
+	}
+
+	if successes < 2 {
+		t.Errorf("expected at least 2 successes, got %d", successes)
+	}
 }
