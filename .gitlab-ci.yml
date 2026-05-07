@@ -9,6 +9,7 @@ default:
   image: golang:1.25.5
 
 variables:
+  GOPROXY: "https://proxy.golang.org,direct"
   GOPRIVATE: "gitlab.flexinfer.ai"
   GONOSUMDB: "gitlab.flexinfer.ai"
   IMAGE_REGISTRY: registry.harbor.lan
