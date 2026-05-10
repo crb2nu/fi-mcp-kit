@@ -13,8 +13,14 @@ variables:
   GOPRIVATE: "gitlab.flexinfer.ai"
   GONOSUMDB: "gitlab.flexinfer.ai"
   IMAGE_REGISTRY: registry.harbor.lan
+  IMAGE_REGISTRIES: "registry.harbor.lan registry.flexinfer.ai"
   GATEWAY_IMAGE_REPO: mcp/fi-mcp-gateway
-  DOCKER_CONFIG: /kaniko/.docker
+  # Central BuildKit endpoint — same as services/loom-core. The pod has
+  # Harbor push credentials baked in cluster-side, so we don't need
+  # HARBOR_USERNAME / HARBOR_PASSWORD CI variables (which had been broken
+  # since at least pipeline #8378 on 2026-05-07).
+  BUILDKIT_HOST: "tcp://buildkitd-central.ci-build.svc.cluster.local:1234"
+  BUILDKIT_CLI_IMAGE: "registry.harbor.lan/dockerhub-cache/moby/buildkit:v0.12.5"
 
 stages: [lint, test, build, deploy]
 
@@ -53,40 +59,32 @@ build:cli:
 
 build:image:fi-mcp-gateway:
   stage: deploy
+  interruptible: true
+  timeout: 60 minutes
+  cache: []
+  resource_group: "buildkit-fi-mcp-gateway-${CI_COMMIT_REF_SLUG}"
+  retry:
+    max: 1
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
   image:
-    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    name: $BUILDKIT_CLI_IMAGE
     entrypoint: [""]
+  variables:
+    GIT_STRATEGY: fetch
+    DOCKER_HOST: ""
   script:
-    - mkdir -p "$DOCKER_CONFIG"
-    - >
-      printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}'
-      "$IMAGE_REGISTRY" "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > "$DOCKER_CONFIG/config.json"
-    - export IMAGE="$IMAGE_REGISTRY/$GATEWAY_IMAGE_REPO"
-    # Timestamp tag enables Flux Image Automation to pick the newest image
-    # by alphabetical-asc order on a stable YYYYMMDD-HHMMSS pattern. Mirrors
-    # services/loom-core's scripts/ci/buildkit-build.sh convention so the
-    # platform/gitops k3s/flux/image-automation/fi-mcp-gateway-imagepolicy.yaml
-    # filter (^[0-9]{8}-[0-9]{6}$) can resolve a latest tag.
-    - export TIMESTAMP_TAG="$(date -u +%Y%m%d-%H%M%S)"
-    - >
-      /kaniko/executor
-      --context "$CI_PROJECT_DIR"
-      --dockerfile "$CI_PROJECT_DIR/Dockerfile.fi-mcp-gateway"
-      --destination "$IMAGE:$CI_COMMIT_SHORT_SHA"
-      --destination "$IMAGE:$TIMESTAMP_TAG"
-      --build-arg "CI_JOB_TOKEN=$CI_JOB_TOKEN"
-    - |
-      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
-        /kaniko/executor \
-          --context "$CI_PROJECT_DIR" \
-          --dockerfile "$CI_PROJECT_DIR/Dockerfile.fi-mcp-gateway" \
-          --destination "$IMAGE:latest" \
-          --build-arg "CI_JOB_TOKEN=$CI_JOB_TOKEN"
-      fi
+    # Mirrors services/loom-core's image jobs: scripts/ci/buildkit-build.sh
+    # builds via the central BuildKit, pushes :SHORT_SHA, :YYYYMMDD-HHMMSS
+    # (timestamp), :latest (on default branch), and :CI_COMMIT_TAG (on tag).
+    # The timestamp tag is what platform/gitops Flux ImagePolicy filters on
+    # — k3s/flux/image-automation/fi-mcp-gateway-imagepolicy.yaml.
+    - chmod +x scripts/ci/buildkit-build.sh
+    - scripts/ci/buildkit-build.sh "$GATEWAY_IMAGE_REPO" Dockerfile.fi-mcp-gateway fi-mcp-gateway
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
-  allow_failure: true
 
 radar-scan:
   extends: .radar-scan
