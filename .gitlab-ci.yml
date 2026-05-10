@@ -62,11 +62,18 @@ build:image:fi-mcp-gateway:
       printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}'
       "$IMAGE_REGISTRY" "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > "$DOCKER_CONFIG/config.json"
     - export IMAGE="$IMAGE_REGISTRY/$GATEWAY_IMAGE_REPO"
+    # Timestamp tag enables Flux Image Automation to pick the newest image
+    # by alphabetical-asc order on a stable YYYYMMDD-HHMMSS pattern. Mirrors
+    # services/loom-core's scripts/ci/buildkit-build.sh convention so the
+    # platform/gitops k3s/flux/image-automation/fi-mcp-gateway-imagepolicy.yaml
+    # filter (^[0-9]{8}-[0-9]{6}$) can resolve a latest tag.
+    - export TIMESTAMP_TAG="$(date -u +%Y%m%d-%H%M%S)"
     - >
       /kaniko/executor
       --context "$CI_PROJECT_DIR"
       --dockerfile "$CI_PROJECT_DIR/Dockerfile.fi-mcp-gateway"
       --destination "$IMAGE:$CI_COMMIT_SHORT_SHA"
+      --destination "$IMAGE:$TIMESTAMP_TAG"
       --build-arg "CI_JOB_TOKEN=$CI_JOB_TOKEN"
     - |
       if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
