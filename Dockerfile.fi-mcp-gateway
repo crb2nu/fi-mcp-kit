@@ -1,4 +1,12 @@
 # syntax=docker/dockerfile:1.7
+# RUNTIME_REGISTRY must be a *global* ARG (declared before the first FROM)
+# so the runtime-stage `FROM ${RUNTIME_REGISTRY}/...` line can resolve it.
+# An ARG declared between stages is stage-local and expands to empty in the
+# next FROM, producing `failed to parse stage name "/dockerhub-cache/...":
+# invalid reference format`. buildkit-build.sh passes this as
+# --opt build-arg:RUNTIME_REGISTRY=<harbor or flexinfer host>.
+ARG RUNTIME_REGISTRY=registry.harbor.lan
+
 # Build stage
 FROM golang:1.25.5-alpine AS builder
 
@@ -61,7 +69,6 @@ RUN --mount=type=secret,id=ci_job_token,required=false \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/fi-mcp-gateway ./cmd/fi-mcp-gateway
 
 # Runtime stage
-ARG RUNTIME_REGISTRY=registry.harbor.lan
 FROM ${RUNTIME_REGISTRY}/dockerhub-cache/library/alpine:3.21
 
 RUN apk add --no-cache ca-certificates
