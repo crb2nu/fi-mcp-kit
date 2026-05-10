@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Build stage
 FROM golang:1.25.5-alpine AS builder
 
@@ -5,23 +6,63 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 
-ARG CI_JOB_TOKEN
-ENV GOPRIVATE=gitlab.flexinfer.ai
-ENV GONOSUMDB=gitlab.flexinfer.ai
+ENV GOPRIVATE=gitlab.flexinfer.ai \
+    GONOSUMDB=gitlab.flexinfer.ai \
+    GONOPROXY=gitlab.flexinfer.ai
 
-RUN if [ -n "${CI_JOB_TOKEN:-}" ]; then \
-      git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.flexinfer.ai/".insteadOf "https://gitlab.flexinfer.ai/"; \
-    fi
-
+# Mirrors services/loom-core/Dockerfile: BuildKit passes the GitLab job
+# token as a BuildKit secret (--secret id=ci_job_token,env=CI_JOB_TOKEN),
+# so the build reads it from /run/secrets/ci_job_token rather than from
+# an ARG. The optional gitlab_token secret is a fallback for projects
+# whose CI_JOB_TOKEN is rejected by the source repo's job-token allowlist.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=secret,id=ci_job_token,required=false \
+    --mount=type=secret,id=gitlab_token,required=false \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -eu; \
+    token=""; \
+    token_user=""; \
+    if [ -s /run/secrets/gitlab_token ]; then \
+      token="$(cat /run/secrets/gitlab_token)"; \
+      token_user="oauth2"; \
+    elif [ -s /run/secrets/ci_job_token ]; then \
+      token="$(cat /run/secrets/ci_job_token)"; \
+      token_user="gitlab-ci-token"; \
+    fi; \
+    if [ -n "$token" ]; then \
+      git config --global url."https://${token_user}:${token}@gitlab.flexinfer.ai/".insteadOf "https://gitlab.flexinfer.ai/"; \
+    fi; \
+    go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/fi-mcp-gateway ./cmd/fi-mcp-gateway
+# Re-apply the same secret + git config inside the build step because the
+# /go/pkg/mod cache mount is shared across image jobs and may not contain
+# pseudo-version VCS metadata, in which case `go build` falls back to
+# `git ls-remote` and needs auth even though `go mod download` already ran.
+RUN --mount=type=secret,id=ci_job_token,required=false \
+    --mount=type=secret,id=gitlab_token,required=false \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -eu; \
+    token=""; \
+    token_user=""; \
+    if [ -s /run/secrets/gitlab_token ]; then \
+      token="$(cat /run/secrets/gitlab_token)"; \
+      token_user="oauth2"; \
+    elif [ -s /run/secrets/ci_job_token ]; then \
+      token="$(cat /run/secrets/ci_job_token)"; \
+      token_user="gitlab-ci-token"; \
+    fi; \
+    if [ -n "$token" ]; then \
+      git config --global url."https://${token_user}:${token}@gitlab.flexinfer.ai/".insteadOf "https://gitlab.flexinfer.ai/"; \
+    fi; \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/fi-mcp-gateway ./cmd/fi-mcp-gateway
 
 # Runtime stage
-FROM alpine:3.21
+ARG RUNTIME_REGISTRY=registry.harbor.lan
+FROM ${RUNTIME_REGISTRY}/dockerhub-cache/library/alpine:3.21
 
 RUN apk add --no-cache ca-certificates
 
