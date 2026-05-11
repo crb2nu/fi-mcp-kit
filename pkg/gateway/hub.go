@@ -240,13 +240,26 @@ func (h *Hub) ListHosts() []string {
 func (h *Hub) backendURL(serverName string) (string, error) {
 	h.mu.RLock()
 	tpl := strings.TrimSpace(h.BackendURLTemplate)
+	reg := h.Registry
 	h.mu.RUnlock()
+
+	if reg != nil {
+		if srv := reg.GetServer(serverName); srv != nil {
+			if u := strings.TrimSpace(srv.URL); u != "" {
+				return validateBackendURL(u)
+			}
+		}
+	}
 
 	if tpl == "" {
 		tpl = "ws://{server}:8080/ws"
 	}
 
 	u := strings.ReplaceAll(tpl, "{server}", serverName)
+	return validateBackendURL(u)
+}
+
+func validateBackendURL(u string) (string, error) {
 	parsed, err := url.Parse(u)
 	if err != nil {
 		return "", fmt.Errorf("parse backend url: %w", err)

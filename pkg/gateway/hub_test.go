@@ -70,6 +70,49 @@ func TestHandler_ReverseProxy_WithRegistryAllowlist(t *testing.T) {
 	}
 }
 
+func TestBackendURLPrefersRegistryURL(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub()
+	hub.Registry = &registry.Registry{
+		Version: 1,
+		Servers: []*registry.Server{{
+			Name: "agent_context",
+			URL:  "ws://mcp-agent-context.loom-hub.svc.cluster.local:8080",
+		}},
+	}
+	hub.BackendURLTemplate = "ws://{server}:8080/ws"
+
+	got, err := hub.backendURL("agent_context")
+	if err != nil {
+		t.Fatalf("backendURL: %v", err)
+	}
+	want := "ws://mcp-agent-context.loom-hub.svc.cluster.local:8080"
+	if got != want {
+		t.Fatalf("backendURL = %q, want %q", got, want)
+	}
+}
+
+func TestBackendURLFallsBackToTemplate(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub()
+	hub.Registry = &registry.Registry{
+		Version: 1,
+		Servers: []*registry.Server{{Name: "tavily"}},
+	}
+	hub.BackendURLTemplate = "ws://mcp-{server}.loom-hub.svc.cluster.local:8080"
+
+	got, err := hub.backendURL("tavily")
+	if err != nil {
+		t.Fatalf("backendURL: %v", err)
+	}
+	want := "ws://mcp-tavily.loom-hub.svc.cluster.local:8080"
+	if got != want {
+		t.Fatalf("backendURL = %q, want %q", got, want)
+	}
+}
+
 func TestHandler_RejectsUnknownServerWhenRegistrySet(t *testing.T) {
 	t.Parallel()
 
