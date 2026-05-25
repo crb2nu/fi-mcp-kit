@@ -203,26 +203,51 @@ func (m *Manager) Stop(serverName string) error {
 
 	// For local processes, graceful shutdown: stdin EOF → wait → SIGTERM → SIGKILL.
 	if proc.Cmd != nil && proc.Cmd.Process != nil {
-		done := make(chan error, 1)
-		go func() { done <- proc.Cmd.Wait() }()
-
-		select {
-		case <-done:
-			// Exited cleanly after stdin close.
-		case <-time.After(2 * time.Second):
-			// SIGTERM for graceful shutdown.
-			_ = proc.Cmd.Process.Signal(syscall.SIGTERM)
-			select {
-			case <-done:
-			case <-time.After(1 * time.Second):
-				// SIGKILL as last resort.
-				_ = proc.Cmd.Process.Kill()
-				<-done
-			}
-		}
+		stopProcess(proc.Cmd, stopSigtermWait, stopSigkillGrace, stopPostKillWait)
 	}
 
 	return nil
+}
+
+// Stop sequence timeouts. Total worst-case Stop() runtime is the sum of all
+// three, ~5 seconds. Each timeout is its own constant so tests can exercise
+// the boundaries.
+const (
+	stopSigtermWait  = 2 * time.Second // Wait after stdin close before SIGTERM.
+	stopSigkillGrace = 1 * time.Second // Wait after SIGTERM before SIGKILL.
+	stopPostKillWait = 2 * time.Second // Wait after SIGKILL before giving up.
+)
+
+// stopProcess walks a child process through the stdin-EOF → SIGTERM → SIGKILL
+// escalation and bounds each phase. The post-SIGKILL bound is the critical
+// one: cmd.Wait() can block indefinitely if a grandchild inherited the
+// process's stdout/stderr pipe and is still alive (Wait copies pipe output
+// until EOF, and EOF only fires when every writer has closed it). SIGKILL
+// only kills the direct child. Without this bound, Stop() pins its callers
+// — on the loom-core side that means callers holding the per-server
+// callLock, which bricks the server until daemon restart. On timeout the
+// Wait goroutine is intentionally leaked; the kernel reaps the zombie when
+// the inherited pipe finally closes or at process exit.
+func stopProcess(cmd *exec.Cmd, sigtermWait, sigkillGrace, postKillWait time.Duration) {
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case <-done:
+		return
+	case <-time.After(sigtermWait):
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-done:
+		return
+	case <-time.After(sigkillGrace):
+	}
+	_ = cmd.Process.Kill()
+	select {
+	case <-done:
+	case <-time.After(postKillWait):
+	}
 }
 
 // StopAll stops all running processes.
