@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -172,6 +173,9 @@ func TestPool_WaitTimeout_Expires(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
+	if !errors.Is(err, ErrExhausted) {
+		t.Fatalf("expected ErrExhausted, got: %v", err)
+	}
 	if elapsed < 150*time.Millisecond {
 		t.Errorf("returned too quickly: %v", elapsed)
 	}
@@ -228,5 +232,30 @@ func TestPool_WaitTimeout_ConcurrentWaiters(t *testing.T) {
 
 	if successes < 2 {
 		t.Errorf("expected at least 2 successes, got %d", successes)
+	}
+}
+
+func TestPool_NoWaitTimeoutReturnsExhaustedError(t *testing.T) {
+	p := New(Config{
+		MaxIdle: 1,
+		MaxOpen: 1,
+		DialFunc: func(ctx context.Context, serverName string) (mcp.Transport, error) {
+			return &mockTransport{}, nil
+		},
+	})
+	defer func() { _ = p.Close() }()
+
+	c1, err := p.Get(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Put(c1)
+
+	_, err = p.Get(context.Background(), "s1")
+	if err == nil {
+		t.Fatal("expected exhausted error")
+	}
+	if !IsExhausted(err) {
+		t.Fatalf("expected exhausted error, got: %v", err)
 	}
 }

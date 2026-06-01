@@ -24,13 +24,21 @@ import (
 )
 
 type Config struct {
-	RegistryPath string
-	Target       string
-	ProxyName    string
-	ProxyVersion string
-	HubURL       string
-	HubToken     string
+	RegistryPath       string
+	Target             string
+	ProxyName          string
+	ProxyVersion       string
+	HubURL             string
+	HubToken           string
+	LocalMaxOpen       int
+	HubMaxOpen         int
+	BackendWaitTimeout time.Duration
 }
+
+const (
+	DefaultLocalMaxOpen = 10
+	DefaultHubMaxOpen   = 20
+)
 
 type Proxy struct {
 	cfg Config
@@ -66,6 +74,15 @@ func New(cfg Config) (*Proxy, error) {
 	if cfg.ProxyVersion == "" {
 		cfg.ProxyVersion = "0.0.0-dev"
 	}
+	if cfg.LocalMaxOpen <= 0 {
+		cfg.LocalMaxOpen = DefaultLocalMaxOpen
+	}
+	if cfg.HubMaxOpen <= 0 {
+		cfg.HubMaxOpen = DefaultHubMaxOpen
+	}
+	if cfg.BackendWaitTimeout < 0 {
+		cfg.BackendWaitTimeout = 0
+	}
 
 	reg, err := registry.Load(cfg.RegistryPath)
 	if err != nil {
@@ -94,15 +111,17 @@ func New(cfg Config) (*Proxy, error) {
 
 	p.hubPool = pool.New(pool.Config{
 		MaxIdle:     5,
-		MaxOpen:     20,
+		MaxOpen:     cfg.HubMaxOpen,
 		IdleTimeout: 10 * time.Minute,
+		WaitTimeout: cfg.BackendWaitTimeout,
 		DialFunc:    p.dialHub,
 	})
 
 	p.localPool = pool.New(pool.Config{
 		MaxIdle:     2,
-		MaxOpen:     10,
+		MaxOpen:     cfg.LocalMaxOpen,
 		IdleTimeout: 30 * time.Minute,
+		WaitTimeout: cfg.BackendWaitTimeout,
 		DialFunc:    p.dialLocal,
 	})
 
