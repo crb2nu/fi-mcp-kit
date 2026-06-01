@@ -77,10 +77,20 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --services-root)
+      if [[ $# -lt 2 ]]; then
+        printf '%s\n\n' '--services-root requires a path' >&2
+        usage >&2
+        exit 2
+      fi
       services_root="$2"
       shift 2
       ;;
     --consumer)
+      if [[ $# -lt 2 ]]; then
+        printf '%s\n\n' '--consumer requires a name' >&2
+        usage >&2
+        exit 2
+      fi
       selected_consumers+=("$2")
       shift 2
       ;;
@@ -150,7 +160,8 @@ workspace_overrides() {
   fi
 
   local matches
-  matches="$(grep -E 'libs/(mcp-go|fi-mcp-kit|fi-accel)' "${go_work}" | sed 's/^[[:space:]]*//' | awk 'BEGIN { sep = "" } { printf "%s%s", sep, $0; sep = ", " }')"
+  matches="$(grep -E 'libs/(mcp-go|fi-mcp-kit|fi-accel)' "${go_work}" || true)"
+  matches="$(printf '%s\n' "${matches}" | sed 's/^[[:space:]]*//' | awk 'BEGIN { sep = "" } NF > 0 { printf "%s%s", sep, $0; sep = ", " }')"
   if [[ -z "${matches}" ]]; then
     printf '%s\n' "go.work present; no MCP core library use entries"
     return
