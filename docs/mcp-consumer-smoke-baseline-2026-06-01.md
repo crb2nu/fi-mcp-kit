@@ -61,8 +61,20 @@ The failures are baseline blockers in the consumer repos, not fixes made here:
 
 ## Kill-Test Status
 
-Status: not a clean unblock for proxy backpressure.
+Status: partial pass, with one explicit consumer blocker.
 
 The baseline is strong enough to show that three MCP consumers still compile/test with their current pinned module graph, including both older `mcp-go v0.1.0` consumers and `mcp-orchestra` on `mcp-go v0.2.0`. It is not strong enough for an unqualified proxy-backpressure unblock because the gateway consumer did not reach package execution and the largest workspace consumer, `loom-core`, failed from existing dirty/generated-test issues while using dirty local library replacements.
 
 Practical integration note: treat this as a partial pass. Continue integration only if the accepted gate is "at least three non-gateway MCP consumers pass"; require a follow-up gateway smoke after `go mod tidy`/module cleanup for a release-quality gate.
+
+## Integration Rerun
+
+The integrated `feat/mcp-core-compat` branch reran the executable harness after merging the matrix, backpressure feature, and this report:
+
+```bash
+scripts/mcp_consumer_smoke.sh --run
+```
+
+Updated result: 4 of 5 consumers passed. `loom-core`, `mcp-orchestra`, `mcp-sandbox`, and `diff-surgeon` passed with `GOFLAGS=-mod=readonly go test ./...`. `loom-core` still emitted non-fatal linker warnings from the local `fi-accel` static archive being built for newer macOS 26.2 than the link target 26.0.
+
+Remaining blocker: `fi-mcp-gateway` still fails before package execution because `go.mod` needs tidy and read-only mode correctly refuses to mutate the service checkout.
