@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -41,7 +42,7 @@ Usage:
   fi-mcp registry validate --registry <path>
   fi-mcp gen configs --registry <path> --output <dir> [--target all|codex|vscode|claude|claude_desktop|kilocode] [--hub-mode] [--hub-url <wss://...>]
   fi-mcp gen manifests --registry <path> --output <dir> [--namespace <ns>] [--image-registry <registry>]
-  fi-mcp proxy --registry <path> [--target codex]
+  fi-mcp proxy --registry <path> [--target codex] [--local-max-open 10] [--hub-max-open 20] [--backend-wait-timeout 0s]
 
 `)
 }
@@ -213,34 +214,15 @@ func runGen(args []string) int {
 }
 
 func runProxy(args []string) int {
-	fs := flag.NewFlagSet("proxy", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	regPath := fs.String("registry", "", "Path to registry.yaml")
-	target := fs.String("target", "codex", "Registry target to use (codex, vscode, claude, etc.)")
-	name := fs.String("name", "fi-mcp", "Proxy server name")
-	version := fs.String("version", "0.0.0-dev", "Proxy server version")
-	hubURL := fs.String("hub-url", "", "Hub WebSocket URL (e.g. wss://mcp.flexinfer.ai/ws)")
-	hubToken := fs.String("hub-token", "", "Authentication token for the MCP hub")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-
-	if strings.TrimSpace(*regPath) == "" {
-		fmt.Fprintln(os.Stderr, "missing --registry")
-		return 2
+	cfg, code := parseProxyFlags(args, os.Stderr)
+	if code != 0 {
+		return code
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	p, err := proxy.New(proxy.Config{
-		RegistryPath: *regPath,
-		Target:       *target,
-		ProxyName:    *name,
-		ProxyVersion: *version,
-		HubURL:       *hubURL,
-		HubToken:     *hubToken,
-	})
+	p, err := proxy.New(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxy init failed: %v\n", err)
 		return 1
@@ -258,4 +240,50 @@ func runProxy(args []string) int {
 	}
 
 	return 0
+}
+
+func parseProxyFlags(args []string, output io.Writer) (proxy.Config, int) {
+	fs := flag.NewFlagSet("proxy", flag.ContinueOnError)
+	fs.SetOutput(output)
+	regPath := fs.String("registry", "", "Path to registry.yaml")
+	target := fs.String("target", "codex", "Registry target to use (codex, vscode, claude, etc.)")
+	name := fs.String("name", "fi-mcp", "Proxy server name")
+	version := fs.String("version", "0.0.0-dev", "Proxy server version")
+	hubURL := fs.String("hub-url", "", "Hub WebSocket URL (e.g. wss://mcp.flexinfer.ai/ws)")
+	hubToken := fs.String("hub-token", "", "Authentication token for the MCP hub")
+	localMaxOpen := fs.Int("local-max-open", proxy.DefaultLocalMaxOpen, "Maximum open local backend connections per server")
+	hubMaxOpen := fs.Int("hub-max-open", proxy.DefaultHubMaxOpen, "Maximum open hub backend connections per server")
+	backendWaitTimeout := fs.Duration("backend-wait-timeout", 0, "How long to wait for a pooled backend connection when saturated (0 disables waiting)")
+	if err := fs.Parse(args); err != nil {
+		return proxy.Config{}, 2
+	}
+
+	if strings.TrimSpace(*regPath) == "" {
+		fmt.Fprintln(output, "missing --registry")
+		return proxy.Config{}, 2
+	}
+	if *localMaxOpen <= 0 {
+		fmt.Fprintln(output, "--local-max-open must be greater than 0")
+		return proxy.Config{}, 2
+	}
+	if *hubMaxOpen <= 0 {
+		fmt.Fprintln(output, "--hub-max-open must be greater than 0")
+		return proxy.Config{}, 2
+	}
+	if *backendWaitTimeout < 0 {
+		fmt.Fprintln(output, "--backend-wait-timeout must be greater than or equal to 0")
+		return proxy.Config{}, 2
+	}
+
+	return proxy.Config{
+		RegistryPath:       *regPath,
+		Target:             *target,
+		ProxyName:          *name,
+		ProxyVersion:       *version,
+		HubURL:             *hubURL,
+		HubToken:           *hubToken,
+		LocalMaxOpen:       *localMaxOpen,
+		HubMaxOpen:         *hubMaxOpen,
+		BackendWaitTimeout: *backendWaitTimeout,
+	}, 0
 }

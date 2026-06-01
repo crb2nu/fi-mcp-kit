@@ -3,6 +3,8 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -102,5 +104,62 @@ func TestBackendInitialize_AdvertisesSamplingAndResourceSubscriptions(t *testing
 
 	if tr.sent[1].Method != "notifications/initialized" {
 		t.Fatalf("expected initialized notification, got %q", tr.sent[1].Method)
+	}
+}
+
+func TestNewAppliesBackpressureConfig(t *testing.T) {
+	regFile := filepath.Join(t.TempDir(), "registry.yaml")
+	if err := os.WriteFile(regFile, []byte("version: 1\nservers: []"), 0644); err != nil {
+		t.Fatalf("write registry file: %v", err)
+	}
+
+	p, err := New(Config{
+		RegistryPath:       regFile,
+		LocalMaxOpen:       3,
+		HubMaxOpen:         4,
+		BackendWaitTimeout: 75 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new proxy: %v", err)
+	}
+	defer p.Close()
+
+	if got := p.localPool.MaxOpen(); got != 3 {
+		t.Fatalf("local max open = %d, want 3", got)
+	}
+	if got := p.hubPool.MaxOpen(); got != 4 {
+		t.Fatalf("hub max open = %d, want 4", got)
+	}
+	if got := p.localPool.WaitTimeout(); got != 75*time.Millisecond {
+		t.Fatalf("local wait timeout = %s, want 75ms", got)
+	}
+	if got := p.hubPool.WaitTimeout(); got != 75*time.Millisecond {
+		t.Fatalf("hub wait timeout = %s, want 75ms", got)
+	}
+}
+
+func TestNewBackpressureDefaultsMatchExistingPoolLimits(t *testing.T) {
+	regFile := filepath.Join(t.TempDir(), "registry.yaml")
+	if err := os.WriteFile(regFile, []byte("version: 1\nservers: []"), 0644); err != nil {
+		t.Fatalf("write registry file: %v", err)
+	}
+
+	p, err := New(Config{RegistryPath: regFile})
+	if err != nil {
+		t.Fatalf("new proxy: %v", err)
+	}
+	defer p.Close()
+
+	if got := p.localPool.MaxOpen(); got != DefaultLocalMaxOpen {
+		t.Fatalf("local max open = %d, want %d", got, DefaultLocalMaxOpen)
+	}
+	if got := p.hubPool.MaxOpen(); got != DefaultHubMaxOpen {
+		t.Fatalf("hub max open = %d, want %d", got, DefaultHubMaxOpen)
+	}
+	if got := p.localPool.WaitTimeout(); got != 0 {
+		t.Fatalf("local wait timeout = %s, want 0", got)
+	}
+	if got := p.hubPool.WaitTimeout(); got != 0 {
+		t.Fatalf("hub wait timeout = %s, want 0", got)
 	}
 }
