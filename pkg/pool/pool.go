@@ -3,6 +3,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -41,6 +42,32 @@ type Pool struct {
 	activeCount map[string]int
 	stats       Stats
 	closed      bool
+}
+
+// ErrExhausted identifies errors returned when a server pool is saturated.
+var ErrExhausted = errors.New("pool exhausted")
+
+// ExhaustedError describes a saturated per-server pool.
+type ExhaustedError struct {
+	ServerName  string
+	MaxOpen     int
+	WaitTimeout time.Duration
+}
+
+func (e *ExhaustedError) Error() string {
+	if e.WaitTimeout > 0 {
+		return fmt.Sprintf("pool exhausted for %s: max open connections reached (max_open=%d, waited %s)", e.ServerName, e.MaxOpen, e.WaitTimeout)
+	}
+	return fmt.Sprintf("pool exhausted for %s: max open connections reached (max_open=%d)", e.ServerName, e.MaxOpen)
+}
+
+func (e *ExhaustedError) Unwrap() error {
+	return ErrExhausted
+}
+
+// IsExhausted reports whether err is a pool saturation error.
+func IsExhausted(err error) bool {
+	return errors.Is(err, ErrExhausted)
 }
 
 // DialFunc is a function that creates a new connection to a server.
@@ -84,6 +111,20 @@ func New(cfg Config) *Pool {
 	return p
 }
 
+// MaxOpen returns the configured maximum open connections per server.
+func (p *Pool) MaxOpen() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxOpen
+}
+
+// WaitTimeout returns the configured timeout for waiting on a saturated pool.
+func (p *Pool) WaitTimeout() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.waitTimeout
+}
+
 // Get retrieves a connection from the pool, or creates a new one.
 func (p *Pool) Get(ctx context.Context, serverName string) (*Conn, error) {
 	p.mu.Lock()
@@ -123,20 +164,26 @@ func (p *Pool) Get(ctx context.Context, serverName string) (*Conn, error) {
 	if p.activeCount[serverName] >= p.maxOpen {
 		if p.waitTimeout <= 0 {
 			p.mu.Unlock()
-			return nil, fmt.Errorf("max connections reached for %s", serverName)
+			return nil, &ExhaustedError{ServerName: serverName, MaxOpen: p.maxOpen}
 		}
 		// Wait for a connection to be returned.
 		deadline := time.Now().Add(p.waitTimeout)
 		for p.activeCount[serverName] >= p.maxOpen {
+			if err := ctx.Err(); err != nil {
+				p.mu.Unlock()
+				return nil, err
+			}
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
 				p.mu.Unlock()
-				return nil, fmt.Errorf("max connections reached for %s (waited %s)", serverName, p.waitTimeout)
+				return nil, &ExhaustedError{ServerName: serverName, MaxOpen: p.maxOpen, WaitTimeout: p.waitTimeout}
 			}
 			// Wake cond after remaining time so we don't block forever.
-			timer := time.AfterFunc(remaining, func() { p.cond.Broadcast() })
+			timer := time.AfterFunc(remaining, p.broadcast)
+			stopContextWake := context.AfterFunc(ctx, p.broadcast)
 			p.cond.Wait() // releases mu, re-acquires on wake
 			timer.Stop()
+			stopContextWake()
 			if p.closed {
 				p.mu.Unlock()
 				return nil, fmt.Errorf("pool is closed")
@@ -171,6 +218,7 @@ func (p *Pool) Get(ctx context.Context, serverName string) (*Conn, error) {
 		p.mu.Lock()
 		p.activeCount[serverName]--
 		p.stats.ActiveConns--
+		p.cond.Broadcast()
 		p.mu.Unlock()
 		return nil, fmt.Errorf("dial %s: %w", serverName, err)
 	}
@@ -246,7 +294,14 @@ func (p *Pool) Close() error {
 		}
 	}
 	p.conns = nil
+	p.cond.Broadcast()
 	return nil
+}
+
+func (p *Pool) broadcast() {
+	p.mu.Lock()
+	p.cond.Broadcast()
+	p.mu.Unlock()
 }
 
 // Stats returns pool statistics.
