@@ -24,6 +24,12 @@ var Upgrader = websocket.Upgrader{
 	},
 }
 
+// pingInterval is the keepalive ping period for hub websocket connections.
+// Exposed as a package var (not a literal) so tests can shorten it to exercise
+// the ping/relay write concurrency without waiting 30s. See
+// TestHandler_ConcurrentPingAndRelay_NoPanic.
+var pingInterval = 30 * time.Second
+
 // Client represents a connected MCP client.
 type Client struct {
 	conn *websocket.Conn
@@ -313,10 +319,13 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 		// Start pinger
 		go func() {
-			ticker := time.NewTicker(30 * time.Second)
+			ticker := time.NewTicker(pingInterval)
 			defer ticker.Stop()
 			for range ticker.C {
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				// WriteControl is concurrency-safe with other writers on this
+				// conn; WriteMessage(PingMessage) is not and panics under a
+				// concurrent relay/registration write.
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 					return
 				}
 			}
@@ -368,10 +377,13 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 			// Start pinger
 			go func() {
-				ticker := time.NewTicker(30 * time.Second)
+				ticker := time.NewTicker(pingInterval)
 				defer ticker.Stop()
 				for range ticker.C {
-					if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					// WriteControl is concurrency-safe with other writers on
+					// this conn; WriteMessage(PingMessage) is not and panics
+					// under a concurrent relay write.
+					if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 						return
 					}
 				}
@@ -462,12 +474,16 @@ func Handler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		closeStop := func() { stopOnce.Do(func() { close(stop) }) }
 
 		ping := func(c *websocket.Conn) {
-			ticker := time.NewTicker(30 * time.Second)
+			ticker := time.NewTicker(pingInterval)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
-					if err := c.WriteMessage(websocket.PingMessage, nil); err != nil {
+					// WriteControl is safe to call concurrently with the relay
+					// goroutine's WriteMessage; a plain WriteMessage(PingMessage)
+					// here races it and panics gorilla/websocket ("concurrent
+					// write to websocket connection"), crashing the gateway.
+					if err := c.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 						closeStop()
 						return
 					}
