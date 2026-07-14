@@ -54,6 +54,9 @@ schema-drift:codex:
   stage: test
   image: golang:1.25.5
   allow_failure: true
+  variables:
+    GOPATH: "$CI_PROJECT_DIR/.go"
+    GOCACHE: "$CI_PROJECT_DIR/.go/cache"
   before_script:
     - mkdir -p "$GOPATH" "$GOCACHE"
   script:
