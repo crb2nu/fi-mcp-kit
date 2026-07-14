@@ -143,9 +143,17 @@ func validateJSONSemantics(data interface{}, result *ValidationResult) {
 		return
 	}
 
-	servers, ok := m["mcpServers"].(map[string]interface{})
+	// Claude Code / Antigravity / Zed use "mcpServers"; VS Code's mcp.json
+	// only reads "servers" (it silently ignores "mcpServers") — see
+	// https://code.visualstudio.com/docs/copilot/customization/mcp-servers.
+	rootKey := "mcpServers"
+	servers, ok := m[rootKey].(map[string]interface{})
 	if !ok {
-		result.AddError(CodeMissingRootKey, "", "missing or invalid mcpServers key")
+		rootKey = "servers"
+		servers, ok = m[rootKey].(map[string]interface{})
+	}
+	if !ok {
+		result.AddError(CodeMissingRootKey, "", "missing or invalid mcpServers/servers key")
 		return
 	}
 
@@ -155,7 +163,7 @@ func validateJSONSemantics(data interface{}, result *ValidationResult) {
 			continue
 		}
 
-		field := fmt.Sprintf("mcpServers.%s", name)
+		field := fmt.Sprintf("%s.%s", rootKey, name)
 
 		// Check command is not empty
 		cmd, _ := server["command"].(string)

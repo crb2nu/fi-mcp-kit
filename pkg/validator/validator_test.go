@@ -172,12 +172,40 @@ func TestValidateJSONSchema_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestValidateJSONSchema_MissingMcpServers(t *testing.T) {
-	content := []byte(`{"servers": {}}`)
+func TestValidateJSONSchema_MissingRootKey(t *testing.T) {
+	content := []byte(`{"contextServers": {}}`)
 
 	result := ValidateJSONSchema("claude", "test.json", content)
 	if !result.HasErrors() {
-		t.Error("expected error for missing mcpServers")
+		t.Error("expected error for missing mcpServers/servers root key")
+	}
+}
+
+// VS Code's mcp.json reads top-level "servers" and silently ignores
+// "mcpServers" — the generator emits "servers" for the vscode target.
+// https://code.visualstudio.com/docs/copilot/customization/mcp-servers
+func TestValidateJSONSchema_VSCodeServersRootKey(t *testing.T) {
+	content := []byte(`{
+		"servers": {
+			"loom": {
+				"command": "/usr/local/bin/loom",
+				"args": ["proxy"]
+			}
+		}
+	}`)
+
+	result := ValidateJSONSchema("vscode", "mcp.json", content)
+	if result.HasErrors() {
+		t.Errorf("expected valid vscode config with servers root, got errors: %v", result.Errors)
+	}
+}
+
+func TestValidateJSONSchema_ServersRootMissingCommand(t *testing.T) {
+	content := []byte(`{"servers": {"loom": {"args": ["proxy"]}}}`)
+
+	result := ValidateJSONSchema("vscode", "mcp.json", content)
+	if !result.HasErrors() {
+		t.Error("expected missing-command error under servers root")
 	}
 }
 

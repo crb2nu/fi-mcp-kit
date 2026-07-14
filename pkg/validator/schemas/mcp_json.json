@@ -4,11 +4,21 @@
   "title": "MCP Client Configuration",
   "description": "JSON Schema for MCP client configuration files (Claude Code, VSCode, Antigravity)",
   "type": "object",
-  "required": ["mcpServers"],
+  "anyOf": [
+    { "required": ["mcpServers"] },
+    { "required": ["servers"] }
+  ],
   "properties": {
     "mcpServers": {
       "type": "object",
-      "description": "Map of server names to their configurations",
+      "description": "Map of server names to their configurations (Claude Code, Antigravity, Zed)",
+      "additionalProperties": {
+        "$ref": "#/definitions/serverConfig"
+      }
+    },
+    "servers": {
+      "type": "object",
+      "description": "Map of server names to their configurations (VS Code mcp.json — VS Code ignores 'mcpServers'; see https://code.visualstudio.com/docs/copilot/customization/mcp-servers)",
       "additionalProperties": {
         "$ref": "#/definitions/serverConfig"
       }
