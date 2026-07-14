@@ -39,7 +39,12 @@ func (v *Validator) ValidateContent(target, filePath string, content []byte) *Va
 	var result *ValidationResult
 
 	// Perform schema validation based on format
-	if IsJSONTarget(target) {
+	if target == "kilocode" {
+		// Kilo 1.0 kilo.json uses the OpenCode-style shape (top-level `mcp`
+		// map), not mcpServers — it gets its own schema and runtime pass.
+		result = ValidateKiloJSON(target, filePath, content)
+		v.runtime.ValidateKiloRuntime(filePath, content, result)
+	} else if IsJSONTarget(target) {
 		result = ValidateJSONSchema(target, filePath, content)
 		// Add runtime checks
 		v.runtime.ValidateJSONRuntime(filePath, content, result)
@@ -102,6 +107,7 @@ func (v *Validator) ValidateDirectory(dir string) ([]*ValidationResult, error) {
 	patterns := map[string]string{
 		"mcp.json":                   "", // Will detect target from parent dir
 		"config.toml":                "",
+		"kilo.json":                  "kilocode",
 		"claude_desktop_config.json": "claude_desktop",
 	}
 
@@ -146,7 +152,9 @@ func (v *Validator) getConfigPath(outputDir, target string) string {
 		return filepath.Join(outputDir, target, "mcp.json")
 	case "claude_desktop":
 		return filepath.Join(outputDir, target, "claude_desktop_config.json")
-	case "codex", "kilocode", "gemini":
+	case "kilocode":
+		return filepath.Join(outputDir, target, "kilo.json")
+	case "codex", "gemini":
 		return filepath.Join(outputDir, target, "config.toml")
 	default:
 		return ""
@@ -161,7 +169,8 @@ func inferTarget(parentDir, filename string) string {
 		return "claude"
 	case ".codex", "codex":
 		return "codex"
-	case ".kilocode", "kilocode":
+	case ".kilocode", "kilocode", ".kilo", "kilo":
+		// "kilo" covers Kilo 1.0's global config dir ~/.config/kilo.
 		return "kilocode"
 	case ".gemini", "gemini":
 		return "gemini"
@@ -176,6 +185,9 @@ func inferTarget(parentDir, filename string) string {
 	// Fall back to filename-based detection
 	if filename == "config.toml" {
 		return "codex" // Default TOML target
+	}
+	if filename == "kilo.json" {
+		return "kilocode"
 	}
 	if filename == "mcp.json" {
 		return "claude" // Default JSON target

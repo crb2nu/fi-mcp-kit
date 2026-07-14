@@ -22,11 +22,15 @@ var geminiSettingsSchemaBytes []byte
 //go:embed schemas/codex_config.json
 var codexConfigSchemaBytes []byte
 
+//go:embed schemas/kilo_config.json
+var kiloConfigSchemaBytes []byte
+
 var (
 	mcpJSONSchema        *jsonschema.Schema
 	claudeSettingsSchema *jsonschema.Schema
 	geminiSettingsSchema *jsonschema.Schema
 	codexConfigSchema    *jsonschema.Schema
+	kiloConfigSchema     *jsonschema.Schema
 )
 
 func init() {
@@ -34,6 +38,7 @@ func init() {
 	claudeSettingsSchema = mustCompileSchema("claude_settings.json", stripNonRE2Patterns(claudeSettingsSchemaBytes))
 	geminiSettingsSchema = mustCompileSchema("gemini_settings.json", geminiSettingsSchemaBytes)
 	codexConfigSchema = mustCompileSchema("codex_config.json", codexConfigSchemaBytes)
+	kiloConfigSchema = mustCompileSchema("kilo_config.json", kiloConfigSchemaBytes)
 }
 
 func mustCompileSchema(name string, data []byte) *jsonschema.Schema {
@@ -203,7 +208,7 @@ type TOMLConfig struct {
 	MCPServers map[string]TOMLServerConfig `toml:"mcp_servers"`
 }
 
-// ValidateTOMLStructure validates TOML config structure for Codex/Kilocode/Gemini.
+// ValidateTOMLStructure validates TOML config structure for Codex/Gemini.
 func ValidateTOMLStructure(target, filePath string, content []byte) *ValidationResult {
 	result := &ValidationResult{
 		Target: target,
@@ -243,6 +248,98 @@ func ValidateTOMLStructure(target, filePath string, content []byte) *ValidationR
 
 	result.Valid = !result.HasErrors()
 	return result
+}
+
+// ValidateKiloJSON validates a Kilo 1.0 kilo.json config (OpenCode-style JSON:
+// top-level `mcp` map with local/remote servers, array commands, `environment`,
+// millisecond timeouts, plus a top-level `permission` map keyed by
+// {server}_{tool} globs).
+func ValidateKiloJSON(target, filePath string, content []byte) *ValidationResult {
+	result := &ValidationResult{
+		Target: target,
+		File:   filePath,
+		Valid:  true,
+	}
+
+	var data interface{}
+	if err := json.Unmarshal(content, &data); err != nil {
+		result.AddError(CodeInvalidSchema, "", fmt.Sprintf("invalid JSON: %v", err))
+		result.Valid = false
+		return result
+	}
+
+	if err := kiloConfigSchema.Validate(data); err != nil {
+		if ve, ok := err.(*jsonschema.ValidationError); ok {
+			for _, cause := range flattenValidationErrors(ve) {
+				field := cause.InstanceLocation
+				if field == "" {
+					field = "/"
+				}
+				result.AddError(CodeInvalidSchema, field, cause.Message)
+			}
+		} else {
+			result.AddError(CodeInvalidSchema, "", err.Error())
+		}
+		result.Valid = false
+	}
+
+	validateKiloSemantics(data, result)
+
+	result.Valid = !result.HasErrors()
+	return result
+}
+
+// validateKiloSemantics performs semantic checks on kilo.json beyond schema
+// validation, producing focused error codes for the common failure modes.
+func validateKiloSemantics(data interface{}, result *ValidationResult) {
+	m, ok := data.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	servers, ok := m["mcp"].(map[string]interface{})
+	if !ok {
+		result.AddError(CodeMissingRootKey, "", "missing or invalid mcp key")
+		return
+	}
+
+	for name, serverData := range servers {
+		server, ok := serverData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		field := fmt.Sprintf("mcp.%s", name)
+
+		serverType, _ := server["type"].(string)
+		switch serverType {
+		case "remote":
+			if url, _ := server["url"].(string); url == "" {
+				result.AddError(CodeMissingCommand, field+".url", "url is required for remote servers")
+			}
+		default:
+			// Local servers (and entries missing type) need a non-empty command array.
+			cmd, ok := server["command"].([]interface{})
+			if !ok || len(cmd) == 0 {
+				result.AddError(CodeMissingCommand, field+".command", "command must be a non-empty array")
+			} else if first, _ := cmd[0].(string); first == "" {
+				result.AddError(CodeMissingCommand, field+".command", "command[0] must be a non-empty string")
+			}
+		}
+
+		if env, exists := server["environment"]; exists {
+			if _, ok := env.(map[string]interface{}); !ok {
+				result.AddError(CodeInvalidEnvType, field+".environment", "environment must be an object")
+			}
+		}
+
+		if timeout, exists := server["timeout"]; exists {
+			if t, ok := timeout.(float64); ok && t < 0 {
+				result.AddError(CodeInvalidTimeout, field+".timeout",
+					fmt.Sprintf("timeout must be non-negative, got %d", int(t)))
+			}
+		}
+	}
 }
 
 // ValidateClaudeSettings validates a Claude Code settings.json against the upstream schema.
@@ -363,6 +460,8 @@ func GetEmbeddedSchema(name string) ([]byte, bool) {
 		return geminiSettingsSchemaBytes, true
 	case "codex_config.json":
 		return codexConfigSchemaBytes, true
+	case "kilo_config.json":
+		return kiloConfigSchemaBytes, true
 	case "mcp_json.json":
 		return mcpJSONSchemaBytes, true
 	default:
@@ -371,9 +470,11 @@ func GetEmbeddedSchema(name string) ([]byte, bool) {
 }
 
 // IsJSONTarget returns true if the target uses JSON format.
+// Note: kilocode uses the Kilo 1.0 kilo.json shape (top-level `mcp` map),
+// not the mcpServers shape — ValidateContent dispatches it to ValidateKiloJSON.
 func IsJSONTarget(target string) bool {
 	switch target {
-	case "claude", "claude_desktop", "vscode", "antigravity":
+	case "claude", "claude_desktop", "vscode", "antigravity", "kilocode":
 		return true
 	default:
 		return false
@@ -383,7 +484,7 @@ func IsJSONTarget(target string) bool {
 // IsTOMLTarget returns true if the target uses TOML format.
 func IsTOMLTarget(target string) bool {
 	switch target {
-	case "codex", "kilocode", "gemini":
+	case "codex", "gemini":
 		return true
 	default:
 		return false

@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://loom.flexinfer.ai/schemas/kilo-config.json",
+  "title": "Kilo Code Configuration (MCP surface)",
+  "description": "JSON Schema for Kilo 1.0 kilo.json — validates the top-level mcp and permission maps; other config keys are allowed and unvalidated. Vendor schema: https://app.kilo.ai/config.json; docs: https://kilo.ai/docs/automate/mcp/using-in-kilo-code",
+  "type": "object",
+  "required": ["mcp"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "mcp": {
+      "type": "object",
+      "description": "Map of server names to local (stdio) or remote (HTTP/SSE) MCP server configurations",
+      "additionalProperties": {
+        "$ref": "#/definitions/serverConfig"
+      }
+    },
+    "permission": {
+      "type": "object",
+      "description": "Tool approval rules keyed by namespaced tool name {server}_{tool} with glob support (e.g. loom_*)",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": ["ask", "allow", "deny"]
+          },
+          {
+            "type": "object",
+            "description": "Rule-based permission object (per-operation sub-permissions)"
+          }
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "serverConfig": {
+      "oneOf": [
+        { "$ref": "#/definitions/localServer" },
+        { "$ref": "#/definitions/remoteServer" }
+      ]
+    },
+    "localServer": {
+      "type": "object",
+      "description": "Local (stdio) MCP server",
+      "required": ["type", "command"],
+      "properties": {
+        "type": {
+          "const": "local"
+        },
+        "command": {
+          "type": "array",
+          "description": "Command and arguments to run the MCP server",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory; relative paths resolve against the workspace"
+        },
+        "environment": {
+          "type": "object",
+          "description": "Environment variables to set for the server",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the server is enabled (defaults to true)"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Startup/request timeout in milliseconds",
+          "minimum": 1
+        }
+      }
+    },
+    "remoteServer": {
+      "type": "object",
+      "description": "Remote (HTTP/SSE) MCP server",
+      "required": ["type", "url"],
+      "properties": {
+        "type": {
+          "const": "remote"
+        },
+        "url": {
+          "type": "string",
+          "description": "URL of the remote MCP server",
+          "minLength": 1
+        },
+        "headers": {
+          "type": "object",
+          "description": "HTTP headers to send (e.g. Authorization)",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "oauth": {
+          "description": "OAuth configuration object, or false to disable"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the server is enabled (defaults to true)"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Request timeout in milliseconds",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

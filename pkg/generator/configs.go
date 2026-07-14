@@ -38,6 +38,8 @@ func GenerateConfigsWithPath(reg *registry.Registry, registryPath string, output
 			err = generateExampleClientConfig(reg, registryPath, outputDir, hubMode, hubURL, proxyMode, proxyBinary, repoRoot)
 		case "example_desktop":
 			err = generateExampleDesktopConfig(reg, registryPath, outputDir, hubMode, hubURL, proxyMode, proxyBinary, repoRoot)
+		case "kilocode":
+			err = generateKiloJSONConfig(reg, registryPath, outputDir, hubMode, hubURL, proxyMode, proxyBinary, repoRoot)
 		default:
 			err = generateTomlConfig(reg, registryPath, outputDir, target, hubMode, hubURL, proxyMode, proxyBinary, repoRoot)
 		}
@@ -159,6 +161,75 @@ func generateJSONConfig(reg *registry.Registry, registryPath string, outputDir s
 		return err
 	}
 	return os.WriteFile(filepath.Join(destDir, "mcp.json"), data, 0644)
+}
+
+// generateKiloJSONConfig generates a Kilo 1.0 kilo.json config: a top-level
+// `mcp` map (type local, array command, `environment`, millisecond timeouts)
+// plus a `permission` map keyed by {server}_{tool} globs.
+// Docs: https://kilo.ai/docs/automate/mcp/using-in-kilo-code
+func generateKiloJSONConfig(reg *registry.Registry, registryPath string, outputDir string, hubMode bool, hubURL string, proxyMode bool, proxyBinary string, repoRoot string) error {
+	targets, err := buildTargetMap(reg, registryPath, "kilocode", hubMode, hubURL, "kilocode", proxyMode, proxyBinary, repoRoot)
+	if err != nil {
+		return err
+	}
+
+	type KiloServer struct {
+		Type        string            `json:"type"`
+		Command     []string          `json:"command"`
+		Environment map[string]string `json:"environment,omitempty"`
+		Enabled     bool              `json:"enabled"`
+		Timeout     int               `json:"timeout,omitempty"`
+	}
+
+	mcpServers := make(map[string]KiloServer)
+	permission := make(map[string]string)
+	for name, spec := range targets {
+		cmd := []string{spec.Command}
+		for _, a := range spec.Args {
+			cmd = append(cmd, fmt.Sprintf("%v", a))
+		}
+
+		server := KiloServer{
+			Type:    "local",
+			Command: cmd,
+			Enabled: true,
+		}
+		if len(spec.Env) > 0 {
+			server.Environment = spec.Env
+		}
+		if spec.Timeout > 0 {
+			server.Timeout = spec.Timeout * 1000 // Kilo uses milliseconds
+		}
+		mcpServers[name] = server
+
+		// An empty AlwaysAllow keeps parity with the legacy always_allow=["*"].
+		allows := spec.AlwaysAllow
+		if len(allows) == 0 {
+			allows = []string{"*"}
+		}
+		for _, tool := range allows {
+			permission[name+"_"+tool] = "allow"
+		}
+	}
+
+	config := map[string]any{
+		"$schema": "https://app.kilo.ai/config.json",
+		"mcp":     mcpServers,
+	}
+	if len(permission) > 0 {
+		config["permission"] = permission
+	}
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	destDir := filepath.Join(outputDir, "kilocode")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(destDir, "kilo.json"), data, 0644)
 }
 
 func generateExampleDesktopConfig(reg *registry.Registry, registryPath string, outputDir string, hubMode bool, hubURL string, proxyMode bool, proxyBinary string, repoRoot string) error {

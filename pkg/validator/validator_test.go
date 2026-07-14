@@ -323,8 +323,8 @@ func TestIsJSONTarget(t *testing.T) {
 		{"claude_desktop", true},
 		{"vscode", true},
 		{"antigravity", true},
+		{"kilocode", true},
 		{"codex", false},
-		{"kilocode", false},
 		{"gemini", false},
 		{"unknown", false},
 	}
@@ -344,8 +344,8 @@ func TestIsTOMLTarget(t *testing.T) {
 		want   bool
 	}{
 		{"codex", true},
-		{"kilocode", true},
 		{"gemini", true},
+		{"kilocode", false},
 		{"claude", false},
 		{"vscode", false},
 		{"unknown", false},
@@ -697,7 +697,7 @@ func TestValidator_getConfigPath(t *testing.T) {
 		{"antigravity", "/output/antigravity/mcp.json"},
 		{"claude_desktop", "/output/claude_desktop/claude_desktop_config.json"},
 		{"codex", "/output/codex/config.toml"},
-		{"kilocode", "/output/kilocode/config.toml"},
+		{"kilocode", "/output/kilocode/kilo.json"},
 		{"gemini", "/output/gemini/config.toml"},
 		{"unknown", ""},
 	}
@@ -724,8 +724,12 @@ func TestInferTarget(t *testing.T) {
 		{".vscode", "mcp.json", "vscode"},
 		{".vscode-mcp", "mcp.json", "vscode"},
 		{"claude_desktop", "claude_desktop_config.json", "claude_desktop"},
+		{".kilocode", "kilo.json", "kilocode"},
+		{"kilo", "kilo.json", "kilocode"},
+		{".kilo", "kilo.json", "kilocode"},
 		{"random", "config.toml", "codex"},
 		{"random", "mcp.json", "claude"},
+		{"random", "kilo.json", "kilocode"},
 		{"random", "other.yaml", "unknown"},
 	}
 
@@ -1049,6 +1053,214 @@ default_tools_approval_mode = "approve"
 	}
 }
 
+// --- Kilo kilo.json Tests ---
+
+func TestValidateKiloJSON_ValidLocalServer(t *testing.T) {
+	content := []byte(`{
+		"$schema": "https://app.kilo.ai/config.json",
+		"mcp": {
+			"loom": {
+				"type": "local",
+				"command": ["node", "server.js"],
+				"environment": {"API_KEY": "test"},
+				"enabled": true,
+				"timeout": 600000
+			}
+		},
+		"permission": {
+			"loom_*": "allow"
+		}
+	}`)
+
+	result := ValidateKiloJSON("kilocode", "kilo.json", content)
+	if !result.Valid {
+		t.Errorf("expected valid result, got errors: %v", result.Errors)
+	}
+}
+
+func TestValidateKiloJSON_ValidRemoteServer(t *testing.T) {
+	content := []byte(`{
+		"mcp": {
+			"remote-server": {
+				"type": "remote",
+				"url": "https://example.com/mcp",
+				"headers": {"Authorization": "Bearer ${TOKEN}"},
+				"timeout": 15000
+			}
+		}
+	}`)
+
+	result := ValidateKiloJSON("kilocode", "kilo.json", content)
+	if !result.Valid {
+		t.Errorf("expected valid result, got errors: %v", result.Errors)
+	}
+}
+
+func TestValidateKiloJSON_InvalidJSON(t *testing.T) {
+	result := ValidateKiloJSON("kilocode", "kilo.json", []byte(`{not json`))
+	if !result.HasErrors() {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestValidateKiloJSON_MissingMcpKey(t *testing.T) {
+	content := []byte(`{"permission": {"loom_*": "allow"}}`)
+
+	result := ValidateKiloJSON("kilocode", "kilo.json", content)
+	if !result.HasErrors() {
+		t.Error("expected error for missing mcp key")
+	}
+
+	found := false
+	for _, e := range result.Errors {
+		if e.Code == CodeMissingRootKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected MISSING_ROOT_KEY error code")
+	}
+}
+
+func TestValidateKiloJSON_EmptyCommand(t *testing.T) {
+	content := []byte(`{
+		"mcp": {
+			"bad": {"type": "local", "command": []}
+		}
+	}`)
+
+	result := ValidateKiloJSON("kilocode", "kilo.json", content)
+	if !result.HasErrors() {
+		t.Error("expected error for empty command array")
+	}
+
+	found := false
+	for _, e := range result.Errors {
+		if e.Code == CodeMissingCommand {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected MISSING_COMMAND error code")
+	}
+}
+
+func TestValidateKiloJSON_RemoteMissingURL(t *testing.T) {
+	content := []byte(`{
+		"mcp": {
+			"bad": {"type": "remote"}
+		}
+	}`)
+
+	result := ValidateKiloJSON("kilocode", "kilo.json", content)
+	if !result.HasErrors() {
+		t.Error("expected error for remote server without url")
+	}
+}
+
+func TestValidateKiloJSON_InvalidPermissionValue(t *testing.T) {
+	content := []byte(`{
+		"mcp": {
+			"loom": {"type": "local", "command": ["loom", "proxy"]}
+		},
+		"permission": {
+			"loom_*": "sometimes"
+		}
+	}`)
+
+	result := ValidateKiloJSON("kilocode", "kilo.json", content)
+	if !result.HasErrors() {
+		t.Error("expected error for invalid permission value")
+	}
+}
+
+func TestValidateKiloJSON_InvalidEnvironmentType(t *testing.T) {
+	content := []byte(`{
+		"mcp": {
+			"loom": {"type": "local", "command": ["loom"], "environment": ["A=B"]}
+		}
+	}`)
+
+	result := ValidateKiloJSON("kilocode", "kilo.json", content)
+	if !result.HasErrors() {
+		t.Error("expected error for array-typed environment")
+	}
+}
+
+func TestValidator_ValidateContent_Kilocode(t *testing.T) {
+	v := New("/repo", "/home")
+	content := []byte(`{
+		"$schema": "https://app.kilo.ai/config.json",
+		"mcp": {
+			"loom": {
+				"type": "local",
+				"command": ["loom", "proxy", "--agent", "kilocode"],
+				"environment": {"LOOM_AGENT": "kilocode"},
+				"timeout": 600000
+			}
+		},
+		"permission": {"loom_*": "allow"}
+	}`)
+
+	result := v.ValidateContent("kilocode", "kilo.json", content)
+	if !result.Valid {
+		t.Errorf("expected valid result, got errors: %v", result.Errors)
+	}
+
+	// Relative command should produce a runtime warning, proving the
+	// kilo-specific runtime pass ran.
+	if !result.HasWarnings() {
+		t.Error("expected runtime warning for relative command")
+	}
+}
+
+func TestValidator_FullIntegration_KiloConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	kiloDir := filepath.Join(tmpDir, "kilocode")
+	if err := os.MkdirAll(kiloDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(kiloDir, "kilo.json")
+	content := []byte(`{
+		"mcp": {
+			"test": {"type": "local", "command": ["echo", "hello"]}
+		}
+	}`)
+	if err := os.WriteFile(configFile, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	v := New(tmpDir, tmpDir)
+
+	// ValidateGenerated should find kilocode/kilo.json.
+	results, err := v.ValidateGenerated(tmpDir, []string{"kilocode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Target != "kilocode" {
+		t.Errorf("expected target kilocode, got %s", results[0].Target)
+	}
+	if results[0].HasErrors() {
+		t.Errorf("expected no errors, got: %v", results[0].Errors)
+	}
+
+	// ValidateDirectory should discover the file by name.
+	dirResults, err := v.ValidateDirectory(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dirResults) != 1 {
+		t.Fatalf("expected 1 directory result, got %d", len(dirResults))
+	}
+	if dirResults[0].Target != "kilocode" {
+		t.Errorf("expected inferred target kilocode, got %s", dirResults[0].Target)
+	}
+}
+
 func TestUpstreamSchemas_ReturnsAll(t *testing.T) {
 	schemas := UpstreamSchemas()
 	if len(schemas) != 3 {
@@ -1077,6 +1289,7 @@ func TestGetEmbeddedSchema(t *testing.T) {
 		{"claude_settings.json", true},
 		{"gemini_settings.json", true},
 		{"codex_config.json", true},
+		{"kilo_config.json", true},
 		{"mcp_json.json", true},
 		{"nonexistent.json", false},
 	}
