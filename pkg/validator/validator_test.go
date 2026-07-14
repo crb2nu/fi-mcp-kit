@@ -1009,6 +1009,46 @@ func TestValidateCodexConfig_InvalidTOML(t *testing.T) {
 	}
 }
 
+// TestValidateCodexConfig_ModernKeysNoWarnings pins the vendored schema
+// against keys that a stale copy once flagged as "additionalProperties not
+// allowed" (mcp_servers default_tools_approval_mode, [features]
+// hooks/multi_agent, the [agents] table, and [hooks.state] trust entries).
+// All are valid per the current Codex config reference; regressions here
+// mean the vendored codex_config.json has lagged upstream again.
+func TestValidateCodexConfig_ModernKeysNoWarnings(t *testing.T) {
+	content := []byte(`
+features = { collaboration_modes = true, hooks = true, multi_agent = true, shell_tool = true, unified_exec = true }
+
+[agents]
+max_threads = 4
+max_depth = 1
+job_max_runtime_seconds = 1800
+
+[agents.reviewer]
+description = "Reviews code for correctness, security, and test coverage."
+
+[agents.slice-implementer]
+description = "Implements a single feature slice in an isolated worktree."
+
+[hooks.state."/home/user/.codex/hooks.json:session_start:0:0"]
+trusted_hash = "sha256:91b492d8e28acacda77ea1d4b4afbe6143e99ba558ecb963e4cf519feed012e9"
+
+[mcp_servers.loom]
+command = "loom"
+args = ["proxy", "--agent-hint", "codex"]
+tool_timeout_sec = 600
+default_tools_approval_mode = "approve"
+`)
+
+	result := ValidateCodexConfig("config.toml", content)
+	if result.HasErrors() {
+		t.Errorf("expected valid config, got errors: %v", result.Errors)
+	}
+	if result.HasWarnings() {
+		t.Errorf("expected zero schema warnings, got: %v", result.Errors)
+	}
+}
+
 func TestUpstreamSchemas_ReturnsAll(t *testing.T) {
 	schemas := UpstreamSchemas()
 	if len(schemas) != 3 {
