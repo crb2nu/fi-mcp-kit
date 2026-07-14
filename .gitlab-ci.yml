@@ -45,6 +45,27 @@ test:
     - $(go env GOPATH)/bin/gocover-cobertura < coverage.out > coverage.xml
     - GOFLAGS=-mod=vendor go tool cover -func=coverage.out
 
+# Detects when a vendored upstream config schema (pkg/validator/schemas/)
+# lags the live vendor copy — a stale schema emits false "additionalProperties
+# not allowed" WARNs on every downstream config regen (loom sync). Non-blocking
+# (allow_failure) because upstream can change at any time, independent of the
+# commit under test. Scoped to codex; extend args as other schemas stabilize.
+schema-drift:codex:
+  stage: test
+  image: golang:1.25.5
+  allow_failure: true
+  before_script:
+    - mkdir -p "$GOPATH" "$GOCACHE"
+  script:
+    - GOFLAGS=-mod=vendor go run ./cmd/schema-drift codex
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - pkg/validator/schemas/**
+        - cmd/schema-drift/**
+
 build:cli:
   extends: .go-build
   image: golang:1.25.5

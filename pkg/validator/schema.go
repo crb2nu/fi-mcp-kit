@@ -341,7 +341,7 @@ func UpstreamSchemas() []UpstreamSchemaInfo {
 		{
 			Platform: "codex",
 			Name:     "codex_config.json",
-			URL:      "https://developers.openai.com/codex/config-schema.json",
+			URL:      "https://learn.chatgpt.com/codex/config-schema.json",
 		},
 	}
 }
