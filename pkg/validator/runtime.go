@@ -48,6 +48,49 @@ func (v *RuntimeValidator) ValidateJSONRuntime(filePath string, content []byte, 
 	}
 }
 
+// ValidateKiloRuntime validates runtime aspects of a Kilo kilo.json config.
+// Local servers use array commands (command[0] is the executable) and an
+// `environment` map; remote servers have no local process to check.
+func (v *RuntimeValidator) ValidateKiloRuntime(filePath string, content []byte, result *ValidationResult) {
+	var data map[string]interface{}
+	if err := json.Unmarshal(content, &data); err != nil {
+		return // Schema validation already caught this
+	}
+
+	servers, ok := data["mcp"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	for name, serverData := range servers {
+		server, ok := serverData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		if serverType, _ := server["type"].(string); serverType == "remote" {
+			continue
+		}
+
+		field := fmt.Sprintf("mcp.%s", name)
+
+		// Split the array command into command + args for unified validation.
+		serverMap := map[string]interface{}{
+			"env": server["environment"],
+		}
+		if cmd, ok := server["command"].([]interface{}); ok && len(cmd) > 0 {
+			if first, ok := cmd[0].(string); ok {
+				serverMap["command"] = first
+			}
+			if len(cmd) > 1 {
+				serverMap["args"] = cmd[1:]
+			}
+		}
+
+		v.validateServerSpec(field, serverMap, result)
+	}
+}
+
 // ValidateTOMLRuntime validates runtime aspects of a TOML config.
 func (v *RuntimeValidator) ValidateTOMLRuntime(filePath string, content []byte, result *ValidationResult) {
 	var cfg TOMLConfig
