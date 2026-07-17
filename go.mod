@@ -7,7 +7,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
-	gitlab.flexinfer.ai/libs/mcp-go v0.2.1-0.20260116221656-df35197c2d46
+	gitlab.flexinfer.ai/libs/mcp-go v0.2.1-0.20260706133009-c5a240709f8c
 	go.opentelemetry.io/otel v1.39.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.39.0
 	go.opentelemetry.io/otel/sdk v1.39.0
@@ -30,6 +30,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
+	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )

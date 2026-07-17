@@ -76,8 +76,8 @@ func parseEmbeddedJSON(s string) (any, bool) {
 		return nil, false
 	}
 	// Only attempt full JSON documents (object/array). Avoid parsing JSON primitives.
-	if !(strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) &&
-		!(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
+	if (!strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}")) &&
+		(!strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]")) {
 		return nil, false
 	}
 
@@ -94,4 +94,3 @@ func parseEmbeddedJSON(s string) (any, bool) {
 		return nil, false
 	}
 }
-

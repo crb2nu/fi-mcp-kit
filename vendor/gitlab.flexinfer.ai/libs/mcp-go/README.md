@@ -147,6 +147,11 @@ The server uses stdio transport by default. It supports both:
 - Newline-delimited JSON (MCP standard)
 - Content-Length framing (LSP-style)
 
+Concurrency notes:
+
+- `Send` is safe to call concurrently.
+- `Recv` calls are serialized internally to avoid `bufio.Reader` races, but callers should still prefer a single receive loop and dispatch by `id` when building clients.
+
 #### WebSocket Transport
 
 For connecting to remote MCP servers:
