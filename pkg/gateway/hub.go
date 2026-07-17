@@ -160,6 +160,12 @@ type Hub struct {
 	// Dialer is used for outbound backend websocket connections (reverse-proxy mode).
 	// If nil, websocket.DefaultDialer is used.
 	Dialer *websocket.Dialer
+
+	// ToolCallTimeout bounds a single REST tool invocation
+	// (POST /api/v1/tools/{server}/{tool}). When zero, the
+	// FI_MCP_TOOL_CALL_TIMEOUT env var is consulted, then
+	// DefaultToolCallTimeout.
+	ToolCallTimeout time.Duration
 }
 
 func NewHub() *Hub {
