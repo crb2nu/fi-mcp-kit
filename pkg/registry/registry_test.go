@@ -258,3 +258,64 @@ servers:
 		t.Errorf("expected namespaced tool name, got '%s'", tools[0].Name)
 	}
 }
+
+func TestServerLevelAlwaysAllow(t *testing.T) {
+	// The hub/gateway registry shape (loom-gateway-registry ConfigMap)
+	// declares always_allow directly on the server entry.
+	tmpDir := t.TempDir()
+	regPath := filepath.Join(tmpDir, "registry.yaml")
+
+	content := `
+version: 1
+hub:
+  mode: kubernetes
+  namespace: loom-hub
+servers:
+  - name: tavily
+    url: ws://mcp-tavily.loom-hub.svc.cluster.local:8080/ws
+    categories: [search, docs]
+    timeout: 60
+    always_allow:
+      - search
+      - extract
+  - name: jira
+    url: ws://mcp-jira.loom-hub.svc.cluster.local:8080/ws
+    common:
+      always_allow:
+        - jira_search
+`
+	if err := os.WriteFile(regPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := registry.Load(regPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	srv := reg.GetServer("tavily")
+	if srv == nil {
+		t.Fatal("expected tavily server")
+	}
+	if len(srv.AlwaysAllow) != 2 || srv.AlwaysAllow[0] != "search" {
+		t.Errorf("expected server-level always_allow [search extract], got %v", srv.AlwaysAllow)
+	}
+
+	tests := []struct {
+		server string
+		tool   string
+		want   bool
+	}{
+		{"tavily", "search", true},     // server-level list
+		{"tavily", "extract", true},    // server-level list
+		{"tavily", "crawl", false},     // not listed
+		{"jira", "jira_search", true},  // common-spec list
+		{"jira", "jira_create", false}, // not listed
+		{"missing", "anything", false}, // unknown server
+	}
+	for _, tt := range tests {
+		if got := reg.IsToolAlwaysAllowed(tt.server, "common", tt.tool); got != tt.want {
+			t.Errorf("IsToolAlwaysAllowed(%s, common, %s) = %v, want %v", tt.server, tt.tool, got, tt.want)
+		}
+	}
+}

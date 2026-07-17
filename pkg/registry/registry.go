@@ -128,11 +128,17 @@ type EnvVar struct {
 
 // Server defines an MCP server in the registry.
 type Server struct {
-	Name       string                 `yaml:"name"`
-	URL        string                 `yaml:"url,omitempty"`
-	Categories []string               `yaml:"categories,omitempty"`
-	Common     *TargetSpec            `yaml:"common,omitempty"`
-	Targets    map[string]*TargetSpec `yaml:"targets,omitempty"`
+	Name       string   `yaml:"name"`
+	URL        string   `yaml:"url,omitempty"`
+	Categories []string `yaml:"categories,omitempty"`
+	// AlwaysAllow lists tools allowed without confirmation at the server
+	// level. The hub/gateway registry shape (loom-gateway-registry
+	// ConfigMap) declares always_allow directly on the server entry;
+	// client-config shapes declare it inside common/targets specs. Both
+	// are honored by Registry.IsToolAlwaysAllowed.
+	AlwaysAllow []string               `yaml:"always_allow,omitempty"`
+	Common      *TargetSpec            `yaml:"common,omitempty"`
+	Targets     map[string]*TargetSpec `yaml:"targets,omitempty"`
 }
 
 // ToolSchema defines a tool's schema for static tool advertisement.
@@ -313,6 +319,35 @@ func mergeSpec(dst, src *TargetSpec) {
 	if src.SSH != nil {
 		dst.SSH = src.SSH
 	}
+}
+
+// IsToolAlwaysAllowed reports whether toolName is in the server's
+// always_allow allowlist for the given target. It checks the server-level
+// list (hub/gateway registry shape) and the merged common/target spec
+// (client config shape).
+func (r *Registry) IsToolAlwaysAllowed(serverName, target, toolName string) bool {
+	if r == nil {
+		return false
+	}
+	server := r.GetServer(serverName)
+	if server == nil {
+		return false
+	}
+	for _, t := range server.AlwaysAllow {
+		if t == toolName {
+			return true
+		}
+	}
+	spec, err := r.GetServerSpec(serverName, target)
+	if err != nil || spec == nil {
+		return false
+	}
+	for _, t := range spec.AlwaysAllow {
+		if t == toolName {
+			return true
+		}
+	}
+	return false
 }
 
 // ListServers returns all server names in the registry.

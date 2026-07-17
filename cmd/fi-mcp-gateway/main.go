@@ -77,6 +77,12 @@ func main() {
 		gateway.HostsHandler(hub, w, r)
 	})
 
+	// REST tool invocation (keyless; gated by the registry always_allow
+	// allowlist — see gateway.ToolCallHandler).
+	http.HandleFunc("POST /api/v1/tools/{server}/{tool}", func(w http.ResponseWriter, r *http.Request) {
+		gateway.ToolCallHandler(hub, w, r)
+	})
+
 	http.Handle("/metrics", promhttp.Handler())
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
