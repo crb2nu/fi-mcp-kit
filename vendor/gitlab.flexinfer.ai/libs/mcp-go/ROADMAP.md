@@ -1,34 +1,43 @@
-# Roadmap: mcp-go
+# mcp-go Roadmap
 
-## Vision
-
-To provide a rock-solid, high-performance, and fully compliant Go SDK for the Model Context Protocol (MCP), serving as the foundational layer for all Go-based MCP servers and tools in the FlexInfer ecosystem.
+> Last Updated: 2026-07-02
+> Tier: 2 (see workspace AGENTS.md "Portfolio Tiers")
+> Tracking Issue: https://gitlab.flexinfer.ai/libs/mcp-go/-/issues/3
 
 ## Current Status
 
-- **Protocol**: Full JSON-RPC 2.0 implementation with MCP types.
-- **Transports**: Stdio (JSON-L + Header) and WebSocket.
-- **Utils**: Fluent `ToolBuilder` and connection pooling with idle reaping.
-- **Concurrency**: Parallel request handling with configurable limits and backpressure.
-- **Maturity**: Used in production by 26+ servers.
+Active (steady). mcp-go is the workspace's Go SDK for the Model Context
+Protocol: JSON-RPC 2.0 + MCP types, stdio / WebSocket / Streamable HTTP (+SSE)
+transports, ToolBuilder, connection pooling, and parallel request handling
+with backpressure. Consumed by loom-core's Go MCP servers and by fi-mcp-kit.
+Last meaningful activity 2026-06-17: WebSocket keepalive, liveness gating, and
+singleflight reconnect (`8c42d354`); 2026-06-06 toon codec cross-version
+decode fixes (`fa6daf97`, `aa12cdfb`); 2026-06-01 an MCP SDK compatibility
+smoke test (`a079baf5`). Q1-2026 goals from the previous roadmap (SSE
+transport, validation layer, structured logging) are done. Backlog is empty
+after grooming (the stale 2026-02 backlog-sync issue was closed 2026-07-02).
 
-## Immediate Priorities (Q1 2026)
+- **Plan store**: plan-workspace-portfolio-refresh-2026-h2-roadmaps-quality-baselin-f3db23
+- **Deployed**: not deployed (library; consumed by downstream Go MCP servers)
+- **CI**: go template family (platform/gitops `/ci/templates/go.yml`) + tech-radar scan; lint gate is `go vet`
 
-### Protocol Completeness
+## Now
 
-- [x] **SSE Transport**: Implement Server-Sent Events transport for HTTP-based interactions.
-- [x] **Validation Layer**: Strict schema validation for incoming JSON-RPC messages to fail fast on malformed requests.
-- [x] **Structured Logging**: Deep integration with `slog` for protocol-level trace debugging and tool duration tracking.
+Nothing actively in flight (last landed work 2026-06-17).
 
-## Future Milestones (Q2 2026+)
+## Next
 
-### Advanced Capabilities
+Nothing queued — reliability fixes land on demand from downstream consumers. File P-labeled issues to queue work.
 
-- [ ] **Sampling**: Implement the 'sampling' capability allowing servers to request completions from the client (Agentic patterns).
-- [ ] **Resource Subscriptions**: Support for client subscriptions to resource updates.
-- [ ] **Plugin System**: Experimental support for loading MCP servers as Go plugins.
+## Later
 
-## Maintenance
+- Sampling capability (server-requested completions / agentic patterns)
+- Resource subscriptions
+- Track upstream MCP specification revisions; maintain Go 1.22+ compatibility
 
-- [ ] Maintain compatibility with Go 1.22+.
-- [ ] Regular sync with official MCP specification updates.
+## Backlog
+
+Full backlog: [P1 issues](https://gitlab.flexinfer.ai/libs/mcp-go/-/issues/?label_name[]=P1) ·
+[P2](https://gitlab.flexinfer.ai/libs/mcp-go/-/issues/?label_name[]=P2) ·
+[P3](https://gitlab.flexinfer.ai/libs/mcp-go/-/issues/?label_name[]=P3) ·
+[Milestones](https://gitlab.flexinfer.ai/libs/mcp-go/-/milestones)

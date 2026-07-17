@@ -12,6 +12,8 @@ import (
 )
 
 // SSEServer manages SSE sessions for an MCP server.
+// Deprecated: Use StreamableHTTPServer for new implementations.
+// See https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http
 type SSEServer struct {
 	server *Server
 	mu     sync.RWMutex
@@ -46,7 +48,7 @@ func (s *SSEServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.sessions, sessionID)
 		s.mu.Unlock()
-		transport.Close()
+		_ = transport.Close()
 	}()
 
 	// Headers for SSE
@@ -69,7 +71,7 @@ func (s *SSEServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	// For now, we send `?session_id=<uuid>` assuming the client posts to the same URL or similar.
 	// Actually, let's just send the session ID.
 	endpoint := fmt.Sprintf("?session_id=%s", sessionID)
-	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpoint)
+	_, _ = fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpoint)
 	flusher.Flush()
 
 	// Start the server for this transport in a separate goroutine?
@@ -116,7 +118,7 @@ func (s *SSEServer) HandleMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read body", http.StatusInternalServerError)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var msg Message
 	if err := json.Unmarshal(body, &msg); err != nil {

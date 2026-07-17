@@ -3,13 +3,23 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/sync/singleflight"
+)
+
+// Defaults for transport durability behaviour (see .loom/157).
+const (
+	defaultKeepAliveInterval  = 22 * time.Second // under typical 60-100s proxy idle windows
+	defaultIdleProbeThreshold = 30 * time.Second // sync liveness probe on hand-out beyond this idle age
 )
 
 // WebSocketTransport implements MCP transport over WebSocket.
@@ -18,9 +28,16 @@ type WebSocketTransport struct {
 	serverName  string
 	profile     string
 	clientInfo  ClientInfo
-	initialized bool
+	initialized atomic.Bool
 	mu          sync.Mutex
 	readMu      sync.Mutex
+
+	// Durability state (atomic; safe to read/write from the keepalive goroutine
+	// concurrently with the connection pool).
+	lastTraffic   atomic.Int64 // unix-nano of the last successful app Send/Recv
+	dead          atomic.Bool  // set when a keepalive/liveness ping fails
+	stopKeepalive chan struct{}
+	closeOnce     sync.Once
 }
 
 // WebSocketConfig configures a WebSocket connection.
@@ -34,6 +51,36 @@ type WebSocketConfig struct {
 	ReadTimeout          time.Duration
 	WriteTimeout         time.Duration
 	ClientInfo           ClientInfo // Client info for initialization
+
+	// KeepAliveInterval sets the background WS ping cadence that keeps idle
+	// connections from being reaped (close 1006). Default 22s; negative disables.
+	KeepAliveInterval time.Duration
+	// IdleProbeThreshold makes GetConnection synchronously ping a cached
+	// connection that has been app-idle longer than this before handing it out.
+	// Default 30s; negative disables.
+	IdleProbeThreshold time.Duration
+}
+
+func (cfg WebSocketConfig) keepAliveInterval() time.Duration {
+	switch {
+	case cfg.KeepAliveInterval == 0:
+		return defaultKeepAliveInterval
+	case cfg.KeepAliveInterval < 0:
+		return 0 // disabled
+	default:
+		return cfg.KeepAliveInterval
+	}
+}
+
+func (cfg WebSocketConfig) idleProbeThreshold() time.Duration {
+	switch {
+	case cfg.IdleProbeThreshold == 0:
+		return defaultIdleProbeThreshold
+	case cfg.IdleProbeThreshold < 0:
+		return 0 // disabled
+	default:
+		return cfg.IdleProbeThreshold
+	}
 }
 
 // NewWebSocketTransport creates a WebSocket transport.
@@ -83,12 +130,17 @@ func NewWebSocketTransport(ctx context.Context, cfg WebSocketConfig, serverName 
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 
-	return &WebSocketTransport{
+	t := &WebSocketTransport{
 		conn:       conn,
 		serverName: serverName,
 		profile:    cfg.Profile,
 		clientInfo: cfg.ClientInfo,
-	}, nil
+	}
+	t.markTraffic()
+	if iv := cfg.keepAliveInterval(); iv > 0 {
+		t.startKeepalive(iv)
+	}
+	return t, nil
 }
 
 // Send sends a message over WebSocket.
@@ -105,16 +157,43 @@ func (t *WebSocketTransport) Send(ctx context.Context, msg *Message) error {
 		return fmt.Errorf("write message: %w", err)
 	}
 
+	t.markTraffic()
 	return nil
 }
 
 // Recv receives a message from WebSocket.
+//
+// Recv honors ctx: gorilla's ReadMessage blocks indefinitely on a silent peer
+// (connection open, no frame arriving) and never consults the context, so
+// without a read deadline every ctx timeout ABOVE Recv is cosmetic — a stalled
+// hub wedges the caller forever (the Mills spin-wedge / "Backend unavailable"
+// hang, where an author/tool call hung past its own 45s budget and the outer
+// 10m budget alike). gorilla honors SetReadDeadline, so we derive one from the
+// context's deadline; a ctx that carries no deadline clears any prior one so an
+// intentionally long-lived read (a notification listener) still blocks as
+// before.
 func (t *WebSocketTransport) Recv(ctx context.Context) (*Message, error) {
 	t.readMu.Lock()
 	defer t.readMu.Unlock()
 
+	if dl, ok := ctx.Deadline(); ok {
+		_ = t.conn.SetReadDeadline(dl)
+	} else {
+		_ = t.conn.SetReadDeadline(time.Time{})
+	}
+
 	_, data, err := t.conn.ReadMessage()
 	if err != nil {
+		var nerr net.Error
+		if errors.As(err, &nerr) && nerr.Timeout() {
+			// Our ctx-derived read deadline fired: gorilla's read stream is now
+			// unusable, so mark the connection dead for the pool / mcphub to redial
+			// rather than reuse it. The raw net i/o-timeout error still surfaces so
+			// mcphub's transport-error path invalidates + retries. (Detecting the
+			// timeout on the error itself avoids a race between the net poller's
+			// read deadline and the context timer both firing at the same instant.)
+			t.markDead()
+		}
 		return nil, fmt.Errorf("read message: %w", err)
 	}
 
@@ -123,17 +202,86 @@ func (t *WebSocketTransport) Recv(ctx context.Context) (*Message, error) {
 		return nil, fmt.Errorf("unmarshal message: %w", err)
 	}
 
+	t.markTraffic()
 	return &msg, nil
 }
 
-// Close closes the WebSocket connection.
+// Close closes the WebSocket connection and stops its keepalive loop.
 func (t *WebSocketTransport) Close() error {
+	t.initialized.Store(false)
+	t.dead.Store(true)
+	if t.stopKeepalive != nil {
+		t.closeOnce.Do(func() { close(t.stopKeepalive) })
+	}
 	return t.conn.Close()
+}
+
+// markTraffic records the time of the last successful application Send/Recv.
+func (t *WebSocketTransport) markTraffic() {
+	t.lastTraffic.Store(time.Now().UnixNano())
+}
+
+// idleAge reports how long it has been since the last successful Send/Recv.
+func (t *WebSocketTransport) idleAge() time.Duration {
+	last := t.lastTraffic.Load()
+	if last == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, last))
+}
+
+// isDead reports whether a keepalive/liveness ping has failed on this connection.
+func (t *WebSocketTransport) isDead() bool { return t.dead.Load() }
+
+// markDead marks the connection unusable so the pool will not hand it out again.
+func (t *WebSocketTransport) markDead() { t.dead.Store(true) }
+
+// startKeepalive runs a background ping loop that keeps an otherwise-idle
+// connection from being reaped by an upstream proxy (the close-1006 storm in
+// .loom/149). A failed ping marks the connection dead and stops the loop so the
+// pool reconnects on the next GetConnection instead of failing at call time.
+func (t *WebSocketTransport) startKeepalive(interval time.Duration) {
+	t.stopKeepalive = make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-t.stopKeepalive:
+				return
+			case <-ticker.C:
+				// Recent application traffic already kept the link warm.
+				if t.idleAge() < interval {
+					continue
+				}
+				if err := t.Ping(context.Background()); err != nil {
+					t.markDead()
+					return
+				}
+			}
+		}
+	}()
+}
+
+// alive reports whether a cached connection is safe to hand out. It trusts the
+// keepalive-maintained dead flag and, for connections idle beyond
+// idleProbeThreshold, performs one synchronous liveness ping.
+func (t *WebSocketTransport) alive(idleProbeThreshold time.Duration) bool {
+	if t.isDead() {
+		return false
+	}
+	if idleProbeThreshold > 0 && t.idleAge() > idleProbeThreshold {
+		if err := t.Ping(context.Background()); err != nil {
+			t.markDead()
+			return false
+		}
+	}
+	return true
 }
 
 // Initialize performs the MCP initialization handshake.
 func (t *WebSocketTransport) Initialize(ctx context.Context) error {
-	if t.initialized {
+	if t.initialized.Load() {
 		return nil
 	}
 
@@ -167,13 +315,13 @@ func (t *WebSocketTransport) Initialize(ctx context.Context) error {
 		return fmt.Errorf("send initialized: %w", err)
 	}
 
-	t.initialized = true
+	t.initialized.Store(true)
 	return nil
 }
 
 // IsInitialized returns whether the transport has been initialized.
 func (t *WebSocketTransport) IsInitialized() bool {
-	return t.initialized
+	return t.initialized.Load()
 }
 
 // Ping sends a ping message to check connection health.
@@ -185,41 +333,66 @@ func (t *WebSocketTransport) Ping(ctx context.Context) error {
 
 // WebSocketClient manages multiple WebSocket connections to MCP servers.
 type WebSocketClient struct {
-	cfg        WebSocketConfig
-	conns      map[string]*WebSocketTransport
-	mu         sync.Mutex
-	maxRetries int
+	cfg                WebSocketConfig
+	conns              map[string]*WebSocketTransport
+	mu                 sync.Mutex
+	maxRetries         int
+	idleProbeThreshold time.Duration
+	dialGroup          singleflight.Group // collapses concurrent dials per server name
 }
 
 // NewWebSocketClient creates a new WebSocket client.
 func NewWebSocketClient(cfg WebSocketConfig) *WebSocketClient {
 	return &WebSocketClient{
-		cfg:        cfg,
-		conns:      make(map[string]*WebSocketTransport),
-		maxRetries: 3,
+		cfg:                cfg,
+		conns:              make(map[string]*WebSocketTransport),
+		maxRetries:         3,
+		idleProbeThreshold: cfg.idleProbeThreshold(),
 	}
 }
 
 // GetConnection returns a connection for a server, creating and initializing one if needed.
+//
+// A live cached connection is returned without redialing. A dead/stale one is
+// evicted and a fresh dial is performed; concurrent callers that all find the
+// connection dead share a single redial (singleflight) so one upstream close
+// fails at most one in-flight call rather than the whole pool (.loom/149/157).
 func (c *WebSocketClient) GetConnection(ctx context.Context, serverName string) (*WebSocketTransport, error) {
+	// Fast path: reuse a live cached connection. The liveness probe runs outside
+	// c.mu so a network round-trip never blocks other servers' lookups.
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Check for existing initialized connection
-	if conn, ok := c.conns[serverName]; ok {
-		if conn.IsInitialized() {
-			return conn, nil
+	cached := c.conns[serverName]
+	c.mu.Unlock()
+	if cached != nil {
+		if cached.IsInitialized() && cached.alive(c.idleProbeThreshold) {
+			return cached, nil
 		}
-		// Connection exists but not initialized, close and recreate
-		conn.Close()
-		delete(c.conns, serverName)
+		c.evictIf(serverName, cached)
 	}
 
-	// Create new connection with retries
+	// Slow path: collapse concurrent dials for the same server into one.
+	v, err, _ := c.dialGroup.Do(serverName, func() (interface{}, error) {
+		// Another flight may have already established a live connection.
+		c.mu.Lock()
+		if conn, ok := c.conns[serverName]; ok && conn.IsInitialized() && !conn.isDead() {
+			c.mu.Unlock()
+			return conn, nil
+		}
+		c.mu.Unlock()
+		return c.dialAndStore(ctx, serverName)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*WebSocketTransport), nil
+}
+
+// dialAndStore dials, initializes, and caches a fresh connection with retries.
+func (c *WebSocketClient) dialAndStore(ctx context.Context, serverName string) (*WebSocketTransport, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff
+			// Exponential backoff between attempts.
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
 			select {
 			case <-ctx.Done():
@@ -236,24 +409,42 @@ func (c *WebSocketClient) GetConnection(ctx context.Context, serverName string) 
 
 		// Initialize MCP protocol
 		if err := conn.Initialize(ctx); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			lastErr = fmt.Errorf("init attempt %d: %w", attempt+1, err)
 			continue
 		}
 
+		c.mu.Lock()
+		if old, ok := c.conns[serverName]; ok && old != conn {
+			_ = old.Close()
+		}
 		c.conns[serverName] = conn
+		c.mu.Unlock()
 		return conn, nil
 	}
 
 	return nil, fmt.Errorf("failed after %d attempts: %w", c.maxRetries, lastErr)
 }
 
-// Reconnect forces a reconnection for a specific server.
+// evictIf removes conn from the cache only if it is still the cached entry for
+// serverName, then closes it. The identity check avoids dropping a connection a
+// concurrent dial may have just installed. Closing happens outside c.mu.
+func (c *WebSocketClient) evictIf(serverName string, conn *WebSocketTransport) {
+	c.mu.Lock()
+	if cur, ok := c.conns[serverName]; ok && cur == conn {
+		delete(c.conns, serverName)
+	}
+	c.mu.Unlock()
+	_ = conn.Close()
+}
+
+// Reconnect forces a reconnection for a specific server. It marks the current
+// connection dead (so GetConnection will not hand it back) and routes through
+// the singleflight dial, so a herd of concurrent reconnects shares one redial.
 func (c *WebSocketClient) Reconnect(ctx context.Context, serverName string) (*WebSocketTransport, error) {
 	c.mu.Lock()
 	if conn, ok := c.conns[serverName]; ok {
-		conn.Close()
-		delete(c.conns, serverName)
+		conn.markDead()
 	}
 	c.mu.Unlock()
 
@@ -266,7 +457,7 @@ func (c *WebSocketClient) CloseConnection(serverName string) {
 	defer c.mu.Unlock()
 
 	if conn, ok := c.conns[serverName]; ok {
-		conn.Close()
+		_ = conn.Close()
 		delete(c.conns, serverName)
 	}
 }
@@ -277,13 +468,34 @@ func (c *WebSocketClient) Close() error {
 	defer c.mu.Unlock()
 
 	for name, conn := range c.conns {
-		conn.Close()
+		_ = conn.Close()
 		delete(c.conns, name)
 	}
 	return nil
 }
 
-// Dial implements an interface for connection pooling.
+// Dial implements an interface for connection pooling. It always builds
+// a fresh, initialized WebSocketTransport — pool callers maintain their
+// own bucket of independent *Conn entries and must NOT share an underlying
+// websocket.Conn. Returning the c.conns-cached transport (as GetConnection
+// does) caused pool entries to alias the same socket, so one caller's
+// "mark unhealthy + Close" left every other caller's Send hitting
+// "use of closed network connection". Pool semantics require independent
+// transports — Close()'ing one must not affect any other.
+//
+// Each transport still gets its own keepalive loop (started in
+// NewWebSocketTransport), so every pooled connection is kept warm
+// independently — the close-1006 fix in .loom/149 applies to the pool path
+// here, while GetConnection's liveness gating + singleflight covers the
+// cached path.
 func (c *WebSocketClient) Dial(ctx context.Context, serverName string) (Transport, error) {
-	return c.GetConnection(ctx, serverName)
+	transport, err := NewWebSocketTransport(ctx, c.cfg, serverName)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	if err := transport.Initialize(ctx); err != nil {
+		_ = transport.Close()
+		return nil, fmt.Errorf("initialize: %w", err)
+	}
+	return transport, nil
 }

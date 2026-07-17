@@ -18,13 +18,19 @@
 // Reference: https://modelcontextprotocol.io/
 package mcp
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // JSONRPCVersion is the JSON-RPC version used by MCP.
 const JSONRPCVersion = "2.0"
 
-// ProtocolVersion is the MCP protocol version.
+// ProtocolVersion is the MCP protocol version (legacy).
 const ProtocolVersion = "2024-11-05"
+
+// SupportedProtocolVersions lists all protocol versions this library supports.
+var SupportedProtocolVersions = []string{ProtocolVersion, ProtocolVersion20250618}
 
 // Message is the base JSON-RPC message structure.
 type Message struct {
@@ -156,6 +162,35 @@ type Content struct {
 	Data     string `json:"data,omitempty"`
 }
 
+// MarshalJSON ensures we emit required fields even when they are empty strings.
+//
+// MCP text content requires the `text` field. Using `omitempty` on a string would
+// drop it for empty outputs (e.g., commands with no stdout), which breaks strict
+// client-side validators.
+func (c Content) MarshalJSON() ([]byte, error) {
+	// Always emit the type field.
+	m := map[string]any{
+		"type": c.Type,
+	}
+
+	// For text content, `text` is required even if empty.
+	if strings.EqualFold(c.Type, "text") {
+		m["text"] = c.Text
+	} else if c.Text != "" {
+		// For non-text content, keep previous behavior.
+		m["text"] = c.Text
+	}
+
+	if c.MimeType != "" {
+		m["mimeType"] = c.MimeType
+	}
+	if c.Data != "" {
+		m["data"] = c.Data
+	}
+
+	return json.Marshal(m)
+}
+
 // Resource describes an MCP resource.
 type Resource struct {
 	URI         string `json:"uri"`
@@ -186,6 +221,167 @@ type PromptArgument struct {
 // PromptsListResult is the result of prompts/list.
 type PromptsListResult struct {
 	Prompts []Prompt `json:"prompts"`
+}
+
+// ReadResourceParams are the parameters for resources/read.
+type ReadResourceParams struct {
+	URI string `json:"uri"`
+}
+
+// SubscribeResourceParams are the parameters for resources/subscribe.
+type SubscribeResourceParams struct {
+	URI string `json:"uri"`
+}
+
+// UnsubscribeResourceParams are the parameters for resources/unsubscribe.
+type UnsubscribeResourceParams struct {
+	URI string `json:"uri"`
+}
+
+// ResourceContents represents the contents of a resource.
+type ResourceContents struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"` // Base64 encoded binary data
+}
+
+// ReadResourceResult is the result of resources/read.
+type ReadResourceResult struct {
+	Contents []ResourceContents `json:"contents"`
+}
+
+// EmptyResult is a generic empty JSON-RPC result object.
+type EmptyResult struct{}
+
+// ResourceUpdatedNotification is sent when a subscribed resource changes.
+type ResourceUpdatedNotification struct {
+	URI string `json:"uri"`
+}
+
+// GetPromptParams are the parameters for prompts/get.
+type GetPromptParams struct {
+	Name      string            `json:"name"`
+	Arguments map[string]string `json:"arguments,omitempty"`
+}
+
+// PromptMessage represents a message in a prompt response.
+type PromptMessage struct {
+	Role    string  `json:"role"` // "user" or "assistant"
+	Content Content `json:"content"`
+}
+
+// GetPromptResult is the result of prompts/get.
+type GetPromptResult struct {
+	Description string          `json:"description,omitempty"`
+	Messages    []PromptMessage `json:"messages"`
+}
+
+// ResourceTemplate describes a resource template with URI patterns.
+type ResourceTemplate struct {
+	URITemplate string `json:"uriTemplate"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+// ResourcesListResultWithTemplates extends ResourcesListResult with templates.
+type ResourcesListResultWithTemplates struct {
+	Resources         []Resource         `json:"resources"`
+	ResourceTemplates []ResourceTemplate `json:"resourceTemplates,omitempty"`
+}
+
+// SamplingMessage represents a message for sampling requests.
+type SamplingMessage struct {
+	Role    string  `json:"role"` // "user" or "assistant"
+	Content Content `json:"content"`
+}
+
+// CreateMessageParams are the parameters for sampling/createMessage.
+type CreateMessageParams struct {
+	Messages         []SamplingMessage      `json:"messages"`
+	ModelPreferences *ModelPreferences      `json:"modelPreferences,omitempty"`
+	SystemPrompt     string                 `json:"systemPrompt,omitempty"`
+	IncludeContext   string                 `json:"includeContext,omitempty"` // "none", "thisServer", "allServers"
+	Temperature      *float64               `json:"temperature,omitempty"`
+	MaxTokens        int                    `json:"maxTokens"`
+	StopSequences    []string               `json:"stopSequences,omitempty"`
+	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// ModelPreferences specifies model selection preferences.
+type ModelPreferences struct {
+	Hints           []ModelHint `json:"hints,omitempty"`
+	CostPriority    *float64    `json:"costPriority,omitempty"`         // 0-1
+	SpeedPriority   *float64    `json:"speedPriority,omitempty"`        // 0-1
+	IntelligencePri *float64    `json:"intelligencePriority,omitempty"` // 0-1
+}
+
+// ModelHint provides hints about which model to use.
+type ModelHint struct {
+	Name string `json:"name,omitempty"`
+}
+
+// CreateMessageResult is the result of sampling/createMessage.
+type CreateMessageResult struct {
+	Role       string  `json:"role"` // Always "assistant"
+	Content    Content `json:"content"`
+	Model      string  `json:"model"`
+	StopReason string  `json:"stopReason,omitempty"` // "endTurn", "stopSequence", "maxTokens"
+}
+
+// ProgressNotification is sent during long-running operations.
+type ProgressNotification struct {
+	ProgressToken any     `json:"progressToken"`
+	Progress      float64 `json:"progress"` // Current progress value
+	Total         float64 `json:"total,omitempty"`
+	Message       string  `json:"message,omitempty"`
+}
+
+// StreamUpdate represents an incremental update during a streaming tool call.
+type StreamUpdate struct {
+	// Content to append to the result (for incremental text)
+	Content []Content `json:"content,omitempty"`
+	// Progress for progress bar display (0-1)
+	Progress float64 `json:"progress,omitempty"`
+	// Message for status updates
+	Message string `json:"message,omitempty"`
+	// IsFinal indicates this is the last update
+	IsFinal bool `json:"isFinal,omitempty"`
+	// IsError indicates an error occurred
+	IsError bool `json:"isError,omitempty"`
+}
+
+// CallToolParamsWithMeta includes metadata for tool calls.
+type CallToolParamsWithMeta struct {
+	CallToolParams
+	Meta *CallToolMeta `json:"_meta,omitempty"`
+}
+
+// CallToolMeta contains optional metadata for tool calls.
+type CallToolMeta struct {
+	ProgressToken any `json:"progressToken,omitempty"`
+}
+
+// LoggingLevel represents MCP logging levels.
+type LoggingLevel string
+
+const (
+	LogLevelDebug     LoggingLevel = "debug"
+	LogLevelInfo      LoggingLevel = "info"
+	LogLevelNotice    LoggingLevel = "notice"
+	LogLevelWarning   LoggingLevel = "warning"
+	LogLevelError     LoggingLevel = "error"
+	LogLevelCritical  LoggingLevel = "critical"
+	LogLevelAlert     LoggingLevel = "alert"
+	LogLevelEmergency LoggingLevel = "emergency"
+)
+
+// LogNotification is sent for logging messages.
+type LogNotification struct {
+	Level  LoggingLevel `json:"level"`
+	Logger string       `json:"logger,omitempty"`
+	Data   any          `json:"data"`
 }
 
 // NewRequest creates a new JSON-RPC request message.

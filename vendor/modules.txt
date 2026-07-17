@@ -59,7 +59,7 @@ github.com/prometheus/procfs/internal/util
 # github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 ## explicit; go 1.19
 github.com/santhosh-tekuri/jsonschema/v5
-# gitlab.flexinfer.ai/libs/mcp-go v0.2.1-0.20260116221656-df35197c2d46
+# gitlab.flexinfer.ai/libs/mcp-go v0.2.1-0.20260706133009-c5a240709f8c
 ## explicit; go 1.25.5
 gitlab.flexinfer.ai/libs/mcp-go
 # go.opentelemetry.io/auto/sdk v1.2.1
@@ -127,6 +127,9 @@ golang.org/x/crypto/ssh/knownhosts
 ## explicit; go 1.23.0
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
+# golang.org/x/sync v0.16.0
+## explicit; go 1.23.0
+golang.org/x/sync/singleflight
 # golang.org/x/sys v0.39.0
 ## explicit; go 1.24.0
 golang.org/x/sys/cpu

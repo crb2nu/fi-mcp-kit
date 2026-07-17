@@ -3,23 +3,36 @@ include:
   - project: 'platform/gitops'
     file: '/ci/templates/go.yml'
 
+  - project: 'services/tech-radar'
+    file: '/ci/radar.yml'
 stages: [lint, test, build]
 
 default:
-  image: golang:1.24
+  image: golang:1.25.5
+
+variables:
+  GOPROXY: "https://proxy.golang.org,direct"
+  # The CI runner injects a pre-build step that waits for a Docker daemon when DOCKER_HOST is tcp://localhost:2375.
+  # This repo doesn't use DinD for its Go jobs; disable that wait globally to prevent jobs hanging.
+  DOCKER_HOST: ""
 
 lint:
   extends: .go-lint
-  image: golang:1.24
+  image: golang:1.25.5
+  script:
+    - go vet ./...
 
 test:
   extends: .go-test
-  image: golang:1.24
+  image: golang:1.25.5
   variables:
     CGO_ENABLED: "1"
 
 build:
   extends: .go-build
-  image: golang:1.24
+  image: golang:1.25.5
   script:
     - go build ./...
+
+radar-scan:
+  extends: .radar-scan

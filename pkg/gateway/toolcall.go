@@ -109,7 +109,12 @@ func ToolCallHandler(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return the raw CallToolResult exactly as the backend produced it.
+	// REST consumers json-parse text payloads; rewrite TOON-encoded
+	// structured text to JSON (see normalizeToolResultText).
+	raw = normalizeToolResultText(raw)
+
+	// Return the CallToolResult as the backend produced it (modulo TOON
+	// text normalization above).
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
